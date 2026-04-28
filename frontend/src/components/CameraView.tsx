@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { Card, CardHeader } from "./Card";
+
 type Props = {
   /**
    * Called once the video element is mounted *and* a MediaStream has been
@@ -55,23 +57,39 @@ export function CameraView({ onReady }: Props) {
   }, []);
 
   return (
-    <div className="relative overflow-hidden rounded-lg bg-black">
-      <video
-        ref={videoRef}
-        muted
-        playsInline
-        className="h-auto w-full -scale-x-100"
-      />
-      {!streaming && !error && (
-        <div className="absolute inset-0 flex items-center justify-center text-white">
-          Requesting camera…
-        </div>
-      )}
-      {error && (
-        <div className="absolute inset-0 flex items-center justify-center bg-red-900/80 p-4 text-center text-white">
-          Camera error: {error}
-        </div>
-      )}
-    </div>
+    <Card className="overflow-hidden p-3">
+      <div className="px-1">
+        <CardHeader
+          title="Camera"
+          subtitle={
+            error ? (
+              <span className="text-rose-300">error</span>
+            ) : streaming ? (
+              <span className="text-emerald-300">live</span>
+            ) : (
+              <span className="text-white/55">requesting…</span>
+            )
+          }
+        />
+      </div>
+      <div className="relative mt-2 aspect-[4/3] overflow-hidden rounded-xl bg-black">
+        <video
+          ref={videoRef}
+          muted
+          playsInline
+          className="h-full w-full -scale-x-100 object-cover"
+        />
+        {!streaming && !error && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-sm text-white/80">
+            Requesting camera…
+          </div>
+        )}
+        {error && (
+          <div className="absolute inset-0 flex items-center justify-center bg-rose-950/80 p-4 text-center text-sm text-rose-100">
+            {error}
+          </div>
+        )}
+      </div>
+    </Card>
   );
 }

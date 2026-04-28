@@ -2,76 +2,62 @@
 
 import type { BlinkRuntimeState } from "@/lib/blink/useBlink";
 
+import { Card, CardHeader } from "./Card";
+import { MeterBar } from "./MeterBar";
+import { StatusDot } from "./StatusDot";
+
 type Props = {
   blink: BlinkRuntimeState;
   longThresholdMs: number;
   lookUpThresholdMs: number;
 };
 
-/**
- * Debug + feedback panel: shows whether MediaPipe is ready, whether a face
- * is in frame, the current blink/look-up scores, and progress bars that fill
- * while the user holds each gesture (so they know when they've crossed the
- * long-blink and look-up thresholds).
- */
 export function BlinkStatus({
   blink,
   longThresholdMs,
   lookUpThresholdMs,
 }: Props) {
-  const longProgress = Math.min(1, blink.closedForMs / longThresholdMs);
-  const lookUpProgress = Math.min(1, blink.upForMs / lookUpThresholdMs);
-
   return (
-    <div className="space-y-3 rounded-lg border border-white/15 bg-black/40 p-3 text-sm text-white">
-      <div className="flex justify-between">
-        <span className="text-white/60">Status</span>
-        <span>
-          {blink.error
-            ? `error: ${blink.error}`
-            : !blink.ready
-              ? "loading…"
-              : !blink.faceDetected
-                ? "no face"
-                : "tracking"}
-        </span>
+    <Card className="p-4">
+      <CardHeader title="Tracking" subtitle={<StatusDot blink={blink} />} />
+
+      {blink.error && (
+        <div className="mt-3 rounded-md border border-rose-500/30 bg-rose-500/10 p-2 text-xs text-rose-200">
+          {blink.error}
+        </div>
+      )}
+
+      <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+        <Stat label="Closedness" value={blink.closedness} />
+        <Stat label="Upness" value={blink.upness} />
       </div>
 
-      <div className="flex justify-between gap-4">
-        <span className="text-white/60">Closedness</span>
-        <span className="tabular-nums">{blink.closedness.toFixed(2)}</span>
-        <span className="text-white/60">Upness</span>
-        <span className="tabular-nums">{blink.upness.toFixed(2)}</span>
+      <div className="mt-4 space-y-3">
+        <MeterBar
+          label="Hold blink (start / menu)"
+          value={blink.closedForMs / longThresholdMs}
+          color="#34d399"
+          rightLabel={`${(blink.closedForMs / 1000).toFixed(1)}s`}
+        />
+        <MeterBar
+          label="Hold look-up (space)"
+          value={blink.upForMs / lookUpThresholdMs}
+          color="#38bdf8"
+          rightLabel={`${(blink.upForMs / 1000).toFixed(1)}s`}
+        />
       </div>
+    </Card>
+  );
+}
 
-      <div>
-        <div className="flex justify-between text-xs text-white/60">
-          <span>Hold blink (start / menu)</span>
-          <span className="tabular-nums">
-            {(blink.closedForMs / 1000).toFixed(1)}s
-          </span>
-        </div>
-        <div className="h-2 overflow-hidden rounded bg-white/10">
-          <div
-            className="h-full bg-emerald-400 transition-[width]"
-            style={{ width: `${longProgress * 100}%` }}
-          />
-        </div>
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2">
+      <div className="text-[10px] uppercase tracking-wider text-white/45">
+        {label}
       </div>
-
-      <div>
-        <div className="flex justify-between text-xs text-white/60">
-          <span>Hold look-up (space)</span>
-          <span className="tabular-nums">
-            {(blink.upForMs / 1000).toFixed(1)}s
-          </span>
-        </div>
-        <div className="h-2 overflow-hidden rounded bg-white/10">
-          <div
-            className="h-full bg-sky-400 transition-[width]"
-            style={{ width: `${lookUpProgress * 100}%` }}
-          />
-        </div>
+      <div className="font-mono text-lg tabular-nums text-white/95">
+        {value.toFixed(2)}
       </div>
     </div>
   );
