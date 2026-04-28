@@ -48,8 +48,14 @@ export const DEFAULT_BLINK_CONFIG: BlinkConfig = {
   openThreshold: 0.35,
   intentMinMs: 200,
   longMinMs: 2000,
-  lookUpHigh: 0.7,
-  lookUpLow: 0.4,
+  // Look-up: MediaPipe's eyeLookUp blendshapes measure iris rotation
+  // relative to the head, not absolute gaze. Pure eye-look-up at a screen
+  // typically peaks around 0.4-0.5 (you don't need to roll your eyes far
+  // to see the top of the display). 0.4 / 0.2 hysteresis catches deliberate
+  // upward gaze without triggering on natural top-of-screen glances at the
+  // distances people use AAC apps from. Tune lower if needed for the user.
+  lookUpHigh: 0.4,
+  lookUpLow: 0.2,
   lookUpMinMs: 500,
 };
 
