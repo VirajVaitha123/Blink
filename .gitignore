@@ -216,3 +216,25 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---------- Node / Next.js ----------
+node_modules/
+.next/
+out/
+.vercel
+next-env.d.ts
+*.tsbuildinfo
+
+# ---------- Project ----------
+.env.local
+.env.*.local
+*.log
+
+# ---------- WSL on NTFS ----------
+# Windows alternate-data-stream sidecar files that leak into WSL when files
+# are copied/synced from the Windows filesystem.
+*:Zone.Identifier
+
+# ---------- Local agent / editor scratch ----------
+.claude/
+
