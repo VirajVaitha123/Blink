@@ -5,7 +5,9 @@ import { useCallback, useRef, useState } from "react";
 import { BlinkStatus } from "@/components/BlinkStatus";
 import { CameraView } from "@/components/CameraView";
 import { CommandBar } from "@/components/CommandBar";
+import { GestureLegend } from "@/components/GestureLegend";
 import { ScanGrid } from "@/components/ScanGrid";
+import { ScanSpeedControl } from "@/components/ScanSpeedControl";
 import { Transcript } from "@/components/Transcript";
 import {
   DEFAULT_BLINK_CONFIG,
@@ -18,7 +20,11 @@ import { useScanner } from "@/lib/scanner/useScanner";
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
-  const [scanMs, setScanMs] = useState(1500);
+  // 1100ms is ~27% faster than the original 1500ms default; brisk enough
+  // that an experienced user isn't waiting between groups, but still well
+  // above the slider's 500ms floor for users who need more time. Tunable
+  // live via the ScanSpeedControl slider (500–3000ms).
+  const [scanMs, setScanMs] = useState(1100);
 
   const { state, dispatch } = useScanner({
     scanMs,
@@ -29,13 +35,10 @@ export default function Home() {
   const handleBlinkEvent = useCallback(
     (event: BlinkEvent) => {
       if (event.kind === "long") {
-        if (state.phase === "idle") {
-          dispatch({ type: "start" });
-        } else if (state.phase === "commandScan") {
+        if (state.phase === "idle") dispatch({ type: "start" });
+        else if (state.phase === "commandScan")
           dispatch({ type: "exitCommands" });
-        } else {
-          dispatch({ type: "enterCommands" });
-        }
+        else dispatch({ type: "enterCommands" });
         return;
       }
       if (event.kind === "intent") {
@@ -43,7 +46,6 @@ export default function Home() {
         return;
       }
       if (event.kind === "lookUp") {
-        // Look-up always inserts a space, regardless of scanner phase.
         dispatch({ type: "insertChar", char: " " });
       }
     },
@@ -56,24 +58,12 @@ export default function Home() {
     onEvent: handleBlinkEvent,
   });
 
-  const phaseLabel =
-    state.phase === "idle"
-      ? "Hold a blink for 2s — or press Start"
-      : state.phase === "groupScan"
-        ? "Scanning groups — blink to lock, hold for menu"
-        : state.phase === "letterScan"
-          ? "Scanning letters — blink to commit, hold for menu"
-          : "Command menu — blink to run, hold to cancel";
-
   return (
-    <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 p-6">
-      <header className="flex items-baseline justify-between">
-        <h1 className="text-3xl font-bold tracking-tight">Blink</h1>
-        <span className="text-sm text-white/60">{phaseLabel}</span>
-      </header>
+    <main className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-10 lg:py-12">
+      <PageHeader phase={state.phase} />
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]">
-        <div className="space-y-3">
+      <div className="mt-6 grid gap-5 lg:mt-10 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
+        <aside className="space-y-4">
           <CameraView
             onReady={(video) => {
               videoRef.current = video;
@@ -85,91 +75,145 @@ export default function Home() {
             longThresholdMs={DEFAULT_BLINK_CONFIG.longMinMs}
             lookUpThresholdMs={DEFAULT_BLINK_CONFIG.lookUpMinMs}
           />
+          <ScanSpeedControl scanMs={scanMs} onChange={setScanMs} />
+          <GestureLegend />
+        </aside>
 
-          <div className="space-y-2 rounded-lg border border-white/15 bg-black/40 p-3 text-sm">
-            <label className="flex items-center justify-between gap-4">
-              <span className="text-white/70">Scan speed</span>
-              <span className="tabular-nums text-white/90">
-                {(scanMs / 1000).toFixed(1)}s
-              </span>
-            </label>
-            <input
-              type="range"
-              min={500}
-              max={3000}
-              step={100}
-              value={scanMs}
-              onChange={(e) => setScanMs(Number(e.target.value))}
-              className="w-full"
-            />
-          </div>
-
-          <div className="space-y-1 rounded-lg border border-white/15 bg-black/40 p-3 text-xs text-white/70">
-            <div className="font-semibold uppercase tracking-wider text-white/50">
-              Gestures
-            </div>
-            <div>
-              <span className="text-white/90">Long blink (2s)</span> — start /
-              open command menu / cancel menu
-            </div>
-            <div>
-              <span className="text-white/90">Short blink</span> — select
-              (group → letter → commit)
-            </div>
-            <div>
-              <span className="text-white/90">Look up (0.5s)</span> — insert
-              space
-            </div>
-          </div>
-        </div>
-
-        <div className="space-y-4">
+        <section className="space-y-4">
           <Transcript text={state.text} />
-
           <CommandBar commands={DEFAULT_COMMANDS} state={state} />
-
           <ScanGrid groups={DEFAULT_GROUPS} state={state} />
-
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              className="rounded-md bg-emerald-500 px-4 py-2 font-semibold text-black hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
-              onClick={() => dispatch({ type: "start" })}
-              disabled={state.phase !== "idle"}
-            >
-              Start
-            </button>
-            <button
-              type="button"
-              className="rounded-md bg-white/10 px-4 py-2 font-semibold text-white hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50"
-              onClick={() =>
-                dispatch({
-                  type:
-                    state.phase === "commandScan" ? "exitCommands" : "stop",
-                })
-              }
-              disabled={state.phase === "idle"}
-            >
-              {state.phase === "commandScan" ? "Cancel menu" : "Stop"}
-            </button>
-            <button
-              type="button"
-              className="rounded-md bg-white/10 px-4 py-2 font-semibold text-white hover:bg-white/20"
-              onClick={() => dispatch({ type: "clear" })}
-            >
-              Clear text
-            </button>
-            <button
-              type="button"
-              className="rounded-md bg-white/10 px-4 py-2 font-semibold text-white hover:bg-white/20"
-              onClick={() => dispatch({ type: "select" })}
-              title="Manual select (for testing without a camera)"
-            >
-              Select (debug)
-            </button>
-          </div>
-        </div>
+          <ControlBar state={state} dispatch={dispatch} />
+        </section>
       </div>
     </main>
+  );
+}
+
+function PageHeader({ phase }: { phase: ReturnType<typeof useScanner>["state"]["phase"] }) {
+  const phaseLabel =
+    phase === "idle"
+      ? "Hold a blink for 2s — or press Start"
+      : phase === "groupScan"
+        ? "Scanning groups — blink to lock, hold for menu"
+        : phase === "letterScan"
+          ? "Scanning letters — blink to commit, hold for menu"
+          : "Command menu — blink to run, hold to cancel";
+
+  return (
+    <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+      <div className="flex items-center gap-3">
+        <BrandMark />
+        <div>
+          <h1 className="bg-gradient-to-br from-white via-white to-white/55 bg-clip-text text-3xl font-bold tracking-tight text-transparent sm:text-4xl">
+            Blink
+          </h1>
+          <p className="text-xs uppercase tracking-[0.18em] text-white/45 sm:text-sm">
+            Eye-driven communication
+          </p>
+        </div>
+      </div>
+      <div className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-1.5 text-xs text-white/75 backdrop-blur sm:text-sm">
+        {phaseLabel}
+      </div>
+    </header>
+  );
+}
+
+function BrandMark() {
+  // Inline SVG: a stylised eye with a soft inner glow. Cheap, no asset to
+  // load, scales cleanly.
+  return (
+    <span
+      aria-hidden
+      className="relative grid h-12 w-12 place-items-center rounded-2xl border border-white/15 bg-gradient-to-br from-indigo-500/30 to-fuchsia-500/20 shadow-[0_8px_24px_-12px_rgba(99,102,241,0.6)]"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        className="h-6 w-6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12Z" />
+        <circle cx="12" cy="12" r="2.6" />
+      </svg>
+    </span>
+  );
+}
+
+function ControlBar({
+  state,
+  dispatch,
+}: {
+  state: ReturnType<typeof useScanner>["state"];
+  dispatch: ReturnType<typeof useScanner>["dispatch"];
+}) {
+  return (
+    <div className="flex flex-wrap gap-2 pt-1">
+      <Button
+        variant="primary"
+        onClick={() => dispatch({ type: "start" })}
+        disabled={state.phase !== "idle"}
+      >
+        Start scanning
+      </Button>
+      <Button
+        onClick={() =>
+          dispatch({
+            type: state.phase === "commandScan" ? "exitCommands" : "stop",
+          })
+        }
+        disabled={state.phase === "idle"}
+      >
+        {state.phase === "commandScan" ? "Cancel menu" : "Stop"}
+      </Button>
+      <Button onClick={() => dispatch({ type: "clear" })}>Clear text</Button>
+      <Button
+        onClick={() => dispatch({ type: "select" })}
+        title="Manual select (for testing without a camera)"
+        muted
+      >
+        Select (debug)
+      </Button>
+    </div>
+  );
+}
+
+function Button({
+  children,
+  onClick,
+  disabled,
+  title,
+  variant = "default",
+  muted = false,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  title?: string;
+  variant?: "default" | "primary";
+  muted?: boolean;
+}) {
+  const base =
+    "rounded-xl px-4 py-2 text-sm font-semibold transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-40";
+  const styles =
+    variant === "primary"
+      ? "bg-emerald-400 text-black shadow-[0_8px_24px_-8px_rgba(52,211,153,0.6)] hover:bg-emerald-300 active:scale-[0.98]"
+      : muted
+        ? "border border-white/10 bg-transparent text-white/70 hover:bg-white/5"
+        : "border border-white/12 bg-white/[0.05] text-white/90 hover:bg-white/10 active:scale-[0.98]";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className={`${base} ${styles}`}
+    >
+      {children}
+    </button>
   );
 }

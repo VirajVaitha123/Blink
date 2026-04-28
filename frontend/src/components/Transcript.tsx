@@ -1,16 +1,30 @@
 "use client";
 
+import { Card, CardHeader } from "./Card";
+
 type Props = {
   text: string;
 };
 
 export function Transcript({ text }: Props) {
   return (
-    <div className="min-h-24 rounded-lg border border-white/15 bg-black/40 p-4 text-2xl leading-snug text-white">
-      {text || (
-        <span className="text-white/40">Composed text will appear here…</span>
-      )}
-      <span className="ml-1 inline-block h-7 w-1 animate-pulse bg-white/80 align-middle" />
-    </div>
+    <Card className="p-5 sm:p-6">
+      <CardHeader
+        title="Transcript"
+        subtitle={
+          <span className="font-mono tabular-nums text-white/55">
+            {text.length} chars
+          </span>
+        }
+      />
+      <div className="mt-3 min-h-24 whitespace-pre-wrap break-words text-2xl leading-snug text-white sm:text-3xl">
+        {text || (
+          <span className="text-white/35">
+            Composed text will appear here…
+          </span>
+        )}
+        <span className="ml-1 inline-block h-7 w-[3px] animate-pulse rounded-sm bg-white/85 align-middle" />
+      </div>
+    </Card>
   );
 }
