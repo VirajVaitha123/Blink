@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from "react";
 
 import { BlinkStatus } from "@/components/BlinkStatus";
 import { CameraView } from "@/components/CameraView";
+import { CommandBar } from "@/components/CommandBar";
 import { ScanGrid } from "@/components/ScanGrid";
 import { Transcript } from "@/components/Transcript";
 import {
@@ -11,7 +12,7 @@ import {
   useBlink,
   type BlinkEvent,
 } from "@/lib/blink/useBlink";
-import { DEFAULT_GROUPS } from "@/lib/scanner/layouts";
+import { DEFAULT_COMMANDS, DEFAULT_GROUPS } from "@/lib/scanner/layouts";
 import { useScanner } from "@/lib/scanner/useScanner";
 
 export default function Home() {
@@ -19,19 +20,31 @@ export default function Home() {
   const [cameraReady, setCameraReady] = useState(false);
   const [scanMs, setScanMs] = useState(1500);
 
-  const { state, dispatch } = useScanner({ scanMs, groups: DEFAULT_GROUPS });
+  const { state, dispatch } = useScanner({
+    scanMs,
+    groups: DEFAULT_GROUPS,
+    commands: DEFAULT_COMMANDS,
+  });
 
   const handleBlinkEvent = useCallback(
     (event: BlinkEvent) => {
       if (event.kind === "long") {
-        // Long-blink: start if idle, otherwise stop scanning.
-        if (state.phase === "idle") dispatch({ type: "start" });
-        else dispatch({ type: "stop" });
+        if (state.phase === "idle") {
+          dispatch({ type: "start" });
+        } else if (state.phase === "commandScan") {
+          dispatch({ type: "exitCommands" });
+        } else {
+          dispatch({ type: "enterCommands" });
+        }
         return;
       }
       if (event.kind === "intent") {
-        // Short intentional blink: only meaningful while scanning.
         if (state.phase !== "idle") dispatch({ type: "select" });
+        return;
+      }
+      if (event.kind === "lookUp") {
+        // Look-up always inserts a space, regardless of scanner phase.
+        dispatch({ type: "insertChar", char: " " });
       }
     },
     [dispatch, state.phase],
@@ -45,10 +58,12 @@ export default function Home() {
 
   const phaseLabel =
     state.phase === "idle"
-      ? "Hold a blink for 3s — or press Start"
+      ? "Hold a blink for 2s — or press Start"
       : state.phase === "groupScan"
-        ? "Scanning groups — blink to lock"
-        : "Scanning letters — blink to commit";
+        ? "Scanning groups — blink to lock, hold for menu"
+        : state.phase === "letterScan"
+          ? "Scanning letters — blink to commit, hold for menu"
+          : "Command menu — blink to run, hold to cancel";
 
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 p-6">
@@ -68,6 +83,7 @@ export default function Home() {
           <BlinkStatus
             blink={blink}
             longThresholdMs={DEFAULT_BLINK_CONFIG.longMinMs}
+            lookUpThresholdMs={DEFAULT_BLINK_CONFIG.lookUpMinMs}
           />
 
           <div className="space-y-2 rounded-lg border border-white/15 bg-black/40 p-3 text-sm">
@@ -87,10 +103,30 @@ export default function Home() {
               className="w-full"
             />
           </div>
+
+          <div className="space-y-1 rounded-lg border border-white/15 bg-black/40 p-3 text-xs text-white/70">
+            <div className="font-semibold uppercase tracking-wider text-white/50">
+              Gestures
+            </div>
+            <div>
+              <span className="text-white/90">Long blink (2s)</span> — start /
+              open command menu / cancel menu
+            </div>
+            <div>
+              <span className="text-white/90">Short blink</span> — select
+              (group → letter → commit)
+            </div>
+            <div>
+              <span className="text-white/90">Look up (0.5s)</span> — insert
+              space
+            </div>
+          </div>
         </div>
 
         <div className="space-y-4">
           <Transcript text={state.text} />
+
+          <CommandBar commands={DEFAULT_COMMANDS} state={state} />
 
           <ScanGrid groups={DEFAULT_GROUPS} state={state} />
 
@@ -106,10 +142,15 @@ export default function Home() {
             <button
               type="button"
               className="rounded-md bg-white/10 px-4 py-2 font-semibold text-white hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50"
-              onClick={() => dispatch({ type: "stop" })}
+              onClick={() =>
+                dispatch({
+                  type:
+                    state.phase === "commandScan" ? "exitCommands" : "stop",
+                })
+              }
               disabled={state.phase === "idle"}
             >
-              Stop
+              {state.phase === "commandScan" ? "Cancel menu" : "Stop"}
             </button>
             <button
               type="button"

@@ -1,33 +1,48 @@
 /**
- * Pure state machine for two-level row-column scanning.
+ * Pure state machine for row-column scanning + a command menu.
  *
  * States:
- *   - "idle"        — waiting for start signal (long blink or button)
- *   - "groupScan"   — cursor cycles through groups; intent blink locks group
- *   - "letterScan"  — cursor cycles through letters of locked group; intent
- *                     blink commits letter, then transitions back to groupScan
+ *   - "idle"         — waiting for start signal (long blink or button)
+ *   - "groupScan"    — cursor cycles through letter groups; intent blink locks
+ *   - "letterScan"   — cursor cycles through letters of locked group; intent
+ *                      blink commits the letter, returns to groupScan
+ *   - "commandScan"  — cursor cycles through commands; intent blink runs the
+ *                      command (resume / stop / backspace / clear)
  *
- * The machine is pure: it takes the previous state + an action and returns
- * the next state. The hook in `useScanner.ts` drives ticks via setInterval
- * and forwards blink events as actions.
+ * Long-blink while scanning enters commandScan; long-blink in commandScan
+ * cancels back to groupScan. Look-up gesture inserts a space without
+ * changing the scanner phase (handled via the `insertChar` action).
+ *
+ * The machine is pure: it takes the previous state + an action + config
+ * and returns the next state. Tick scheduling lives in `useScanner.ts`.
  */
 
-import { BACKSPACE, SPACE, type Group } from "./layouts";
+import {
+  type Command,
+  type Group,
+  BACKSPACE,
+  SPACE,
+} from "./layouts";
 
 export type ScannerState =
   | { phase: "idle"; text: string }
   | { phase: "groupScan"; text: string; cursor: number }
-  | { phase: "letterScan"; text: string; groupIndex: number; cursor: number };
+  | { phase: "letterScan"; text: string; groupIndex: number; cursor: number }
+  | { phase: "commandScan"; text: string; cursor: number };
 
 export type ScannerAction =
   | { type: "start" }
   | { type: "stop" }
   | { type: "tick" }
   | { type: "select" }
-  | { type: "clear" };
+  | { type: "clear" }
+  | { type: "enterCommands" }
+  | { type: "exitCommands" }
+  | { type: "insertChar"; char: string };
 
 export type ScannerConfig = {
   groups: readonly Group[];
+  commands: readonly Command[];
 };
 
 export function initialState(): ScannerState {
@@ -39,18 +54,36 @@ export function reduce(
   action: ScannerAction,
   config: ScannerConfig,
 ): ScannerState {
-  const { groups } = config;
+  const { groups, commands } = config;
 
   switch (action.type) {
     case "stop":
       return { phase: "idle", text: state.text };
 
     case "clear":
-      return { phase: state.phase === "idle" ? "idle" : "idle", text: "" };
+      return { phase: "idle", text: "" };
 
     case "start":
       if (state.phase !== "idle") return state;
       return { phase: "groupScan", text: state.text, cursor: 0 };
+
+    case "enterCommands":
+      if (state.phase === "groupScan" || state.phase === "letterScan") {
+        return { phase: "commandScan", text: state.text, cursor: 0 };
+      }
+      return state;
+
+    case "exitCommands":
+      if (state.phase === "commandScan") {
+        return { phase: "groupScan", text: state.text, cursor: 0 };
+      }
+      return state;
+
+    case "insertChar":
+      // Append a character without altering scanner phase. Used by the
+      // look-up gesture for space, but generic so any external trigger
+      // can insert text.
+      return { ...state, text: state.text + action.char };
 
     case "tick": {
       if (state.phase === "groupScan") {
@@ -59,6 +92,9 @@ export function reduce(
       if (state.phase === "letterScan") {
         const groupLen = groups[state.groupIndex].length;
         return { ...state, cursor: (state.cursor + 1) % groupLen };
+      }
+      if (state.phase === "commandScan") {
+        return { ...state, cursor: (state.cursor + 1) % commands.length };
       }
       return state;
     }
@@ -74,8 +110,10 @@ export function reduce(
       }
       if (state.phase === "letterScan") {
         const ch = groups[state.groupIndex][state.cursor];
-        const nextText = applyChar(state.text, ch);
-        return { phase: "groupScan", text: nextText, cursor: 0 };
+        return { phase: "groupScan", text: applyChar(state.text, ch), cursor: 0 };
+      }
+      if (state.phase === "commandScan") {
+        return runCommand(state, commands[state.cursor]);
       }
       return state;
     }
@@ -86,4 +124,20 @@ function applyChar(text: string, ch: string): string {
   if (ch === BACKSPACE) return text.slice(0, -1);
   if (ch === SPACE) return text + " ";
   return text + ch;
+}
+
+function runCommand(
+  state: Extract<ScannerState, { phase: "commandScan" }>,
+  cmd: Command,
+): ScannerState {
+  switch (cmd.id) {
+    case "resume":
+      return { phase: "groupScan", text: state.text, cursor: 0 };
+    case "stop":
+      return { phase: "idle", text: state.text };
+    case "backspace":
+      return { phase: "groupScan", text: state.text.slice(0, -1), cursor: 0 };
+    case "clear":
+      return { phase: "idle", text: "" };
+  }
 }

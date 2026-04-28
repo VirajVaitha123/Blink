@@ -1,12 +1,14 @@
 /**
  * Loads Google's MediaPipe Face Landmarker (with blendshapes) and runs it on
- * a video element. We rely on the model's built-in `eyeBlinkLeft` and
- * `eyeBlinkRight` blendshape scores — they are pre-trained on a large dataset
- * and far more reliable than computing eye-aspect-ratio ourselves.
+ * a video element. We rely on the model's built-in blendshape scores —
+ * pre-trained, no calibration needed for first-pass.
  *
- * Returns a `BlinkScore` (0..1, where 1 = fully closed) per frame. The
- * higher-level intent detection (short blink vs long blink vs natural)
- * lives in `useBlink.ts`.
+ * Per-frame we extract:
+ *   - eyeBlinkLeft / eyeBlinkRight  → drives the blink hook (intent + long)
+ *   - eyeLookUpLeft / eyeLookUpRight → drives the look-up gesture (= space)
+ *
+ * Higher-level intent detection (short blink vs long blink vs sustained
+ * look-up vs noise) lives in `useBlink.ts`.
  */
 import {
   FaceLandmarker,
@@ -16,8 +18,6 @@ import {
 
 // WASM is served from /public so the version always matches the installed
 // `@mediapipe/tasks-vision` (no CDN drift, no cross-origin surprises).
-// See `scripts/copy-mediapipe-wasm` style step in package.json if we ever
-// move to bundler-driven copying.
 const WASM_BASE = "/mediapipe/wasm";
 
 // The face_landmarker model lives on Google's official models bucket.
@@ -25,13 +25,15 @@ const WASM_BASE = "/mediapipe/wasm";
 const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 
-export type BlinkSample = {
-  /** Average of eyeBlinkLeft + eyeBlinkRight blendshape scores (0..1). */
-  closedness: number;
-  /** Whether a face was detected this frame. */
-  faceDetected: boolean;
-  /** Frame timestamp (ms). */
-  timestamp: number;
+export type FaceScores = {
+  /** eyeBlinkLeft blendshape (0..1; 1 = fully closed). */
+  blinkLeft: number;
+  /** eyeBlinkRight blendshape (0..1). */
+  blinkRight: number;
+  /** eyeLookUpLeft blendshape (0..1; 1 = looking strongly up). */
+  lookUpLeft: number;
+  /** eyeLookUpRight blendshape (0..1). */
+  lookUpRight: number;
 };
 
 let landmarkerSingleton: FaceLandmarker | null = null;
@@ -53,17 +55,33 @@ export async function loadFaceLandmarker(): Promise<FaceLandmarker> {
   return landmarkerSingleton;
 }
 
-export function extractBlinkScore(
+export function extractFaceScores(
   result: FaceLandmarkerResult,
-): { left: number; right: number } | null {
+): FaceScores | null {
   const blendshapes = result.faceBlendshapes?.[0]?.categories;
   if (!blendshapes) return null;
 
-  let left = 0;
-  let right = 0;
+  const out: FaceScores = {
+    blinkLeft: 0,
+    blinkRight: 0,
+    lookUpLeft: 0,
+    lookUpRight: 0,
+  };
   for (const cat of blendshapes) {
-    if (cat.categoryName === "eyeBlinkLeft") left = cat.score;
-    else if (cat.categoryName === "eyeBlinkRight") right = cat.score;
+    switch (cat.categoryName) {
+      case "eyeBlinkLeft":
+        out.blinkLeft = cat.score;
+        break;
+      case "eyeBlinkRight":
+        out.blinkRight = cat.score;
+        break;
+      case "eyeLookUpLeft":
+        out.lookUpLeft = cat.score;
+        break;
+      case "eyeLookUpRight":
+        out.lookUpRight = cat.score;
+        break;
+    }
   }
-  return { left, right };
+  return out;
 }
