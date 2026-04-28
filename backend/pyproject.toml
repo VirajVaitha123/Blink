@@ -1,0 +1,23 @@
+# Backend Workspace Root
+# No runtime dependencies — each deployable target (api, functions/*) declares its own.
+# This file orchestrates the workspace and holds dev-only tooling (alembic).
+[project]
+name = "blink"
+version = "0.1.0"
+description = "Blink - Accessibility communication app (blink-driven AAC with live observer mode) - Backend Monorepo"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uv.workspace]
+members = ["blink_shared", "api"]
+
+[tool.uv.sources]
+blink_shared = { workspace = true, editable = true }
+blink-api = { workspace = true, editable = true }
+
+[dependency-groups]
+dev = [
+    "alembic>=1.18.4",
+    "blink_shared",
+    "blink-api",
+]
