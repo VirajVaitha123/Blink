@@ -1,22 +1,24 @@
 /**
  * React hook that turns a raw <video> element into a stream of intentional
- * blink events. Distinguishes:
+ * face-driven events. Three event kinds:
  *
- *   - "natural" blinks (<200ms eyes-closed) — ignored
- *   - "intent" blinks (≥200ms, <3000ms) — used to lock a selection
- *   - "long" blinks (≥3000ms) — used to start scanning
+ *   - "intent"  — short blink (>=intentMinMs, <longMinMs); used to lock a
+ *                 selection in the scanner
+ *   - "long"    — long blink (>=longMinMs); used to start scanning, open
+ *                 the command menu, or cancel out of it
+ *   - "lookUp"  — sustained upward gaze (>=lookUpMinMs); used to insert a
+ *                 space without going through the scanner
  *
- * Detection is binary on the `closedness` score (mean of left/right
- * eyeBlink blendshapes) crossing `closedThreshold`. Hysteresis is provided
- * by separate close/open thresholds.
+ * Each gesture has hysteresis (separate enter/exit thresholds) to keep
+ * detection stable as scores wobble around the threshold.
  */
 "use client";
 
 import { useEffect, useRef, useState } from "react";
 
-import { extractBlinkScore, loadFaceLandmarker } from "./landmarker";
+import { extractFaceScores, loadFaceLandmarker } from "./landmarker";
 
-export type BlinkKind = "intent" | "long";
+export type BlinkKind = "intent" | "long" | "lookUp";
 
 export type BlinkEvent = {
   kind: BlinkKind;
@@ -31,15 +33,30 @@ export type BlinkConfig = {
   openThreshold: number;
   /** Min duration to count as an intentional short blink. */
   intentMinMs: number;
-  /** Min duration to count as a long blink (start signal). */
+  /** Min duration to count as a long blink (start / command-menu signal). */
   longMinMs: number;
+  /** Score threshold above which the user is considered to be looking up. */
+  lookUpHigh: number;
+  /** Score threshold below which the look-up gesture is considered released. */
+  lookUpLow: number;
+  /** Min sustained duration to count as a deliberate look-up. */
+  lookUpMinMs: number;
 };
 
 export const DEFAULT_BLINK_CONFIG: BlinkConfig = {
   closedThreshold: 0.5,
   openThreshold: 0.35,
   intentMinMs: 200,
-  longMinMs: 3000,
+  longMinMs: 2000,
+  // Look-up: MediaPipe's eyeLookUp blendshapes measure iris rotation
+  // relative to the head, not absolute gaze. Pure eye-look-up at a screen
+  // typically peaks around 0.4-0.5 (you don't need to roll your eyes far
+  // to see the top of the display). 0.4 / 0.2 hysteresis catches deliberate
+  // upward gaze without triggering on natural top-of-screen glances at the
+  // distances people use AAC apps from. Tune lower if needed for the user.
+  lookUpHigh: 0.4,
+  lookUpLow: 0.2,
+  lookUpMinMs: 500,
 };
 
 export type BlinkRuntimeState = {
@@ -48,6 +65,9 @@ export type BlinkRuntimeState = {
   closedness: number;
   isClosed: boolean;
   closedForMs: number;
+  upness: number;
+  isLookingUp: boolean;
+  upForMs: number;
   error: string | null;
 };
 
@@ -72,18 +92,22 @@ export function useBlink({
     closedness: 0,
     isClosed: false,
     closedForMs: 0,
+    upness: 0,
+    isLookingUp: false,
+    upForMs: 0,
     error: null,
   });
 
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
 
-  // Track current closed-eye episode start time (performance.now()).
+  // Blink-episode tracking
   const closedStartRef = useRef<number | null>(null);
-  // True once we've already fired a "long" event for the current closed
-  // episode — prevents firing a second short "intent" when the eyes finally
-  // open after a long hold.
   const longFiredRef = useRef(false);
+
+  // Look-up-episode tracking
+  const upStartRef = useRef<number | null>(null);
+  const lookUpFiredRef = useRef(false);
 
   useEffect(() => {
     if (!enabled) return;
@@ -106,22 +130,30 @@ export function useBlink({
             lastVideoTime = video.currentTime;
             const now = performance.now();
             const result = landmarker.detectForVideo(video, now);
-            const score = extractBlinkScore(result);
+            const scores = extractFaceScores(result);
 
-            if (!score) {
-              // No face — reset closed tracking so we don't spuriously fire on
+            if (!scores) {
+              // No face — reset all tracking so we don't spuriously fire on
               // re-acquire.
               closedStartRef.current = null;
               longFiredRef.current = false;
+              upStartRef.current = null;
+              lookUpFiredRef.current = false;
               setState((s) => ({
                 ...s,
                 faceDetected: false,
                 closedness: 0,
                 isClosed: false,
                 closedForMs: 0,
+                upness: 0,
+                isLookingUp: false,
+                upForMs: 0,
               }));
             } else {
-              const closedness = (score.left + score.right) / 2;
+              const closedness = (scores.blinkLeft + scores.blinkRight) / 2;
+              const upness = (scores.lookUpLeft + scores.lookUpRight) / 2;
+
+              // Blink state
               const wasClosed = closedStartRef.current !== null;
               const isClosed = wasClosed
                 ? closedness > cfg.openThreshold
@@ -134,10 +166,8 @@ export function useBlink({
                 const duration = now - (closedStartRef.current ?? now);
                 closedStartRef.current = null;
                 if (longFiredRef.current) {
-                  // Long already fired — don't double-fire on release.
+                  // Long already fired; ignore the trailing release.
                 } else if (duration >= cfg.intentMinMs) {
-                  // Treat anything ≥intent that opened before reaching long
-                  // as an "intent" blink.
                   onEventRef.current?.({
                     kind: "intent",
                     durationMs: duration,
@@ -151,8 +181,8 @@ export function useBlink({
                 !longFiredRef.current &&
                 now - (closedStartRef.current ?? now) >= cfg.longMinMs
               ) {
-                // Crossed the long threshold — fire immediately so the user
-                // gets feedback without having to open their eyes first.
+                // Crossed the long threshold while still closed — fire now so
+                // the user gets feedback without having to open their eyes.
                 longFiredRef.current = true;
                 onEventRef.current?.({
                   kind: "long",
@@ -161,17 +191,54 @@ export function useBlink({
                 });
               }
 
-              const closedForMs =
-                closedStartRef.current !== null
-                  ? now - closedStartRef.current
-                  : 0;
+              // Look-up state.
+              // Suppress while eyes are closed: gaze blendshapes aren't
+              // meaningful during a blink, and we don't want "blink and roll
+              // eyes up" to count as a deliberate gesture.
+              if (isClosed) {
+                upStartRef.current = null;
+                lookUpFiredRef.current = false;
+              } else {
+                const wasUp = upStartRef.current !== null;
+                const isUp = wasUp
+                  ? upness > cfg.lookUpLow
+                  : upness > cfg.lookUpHigh;
+
+                if (isUp && !wasUp) {
+                  upStartRef.current = now;
+                  lookUpFiredRef.current = false;
+                } else if (!isUp && wasUp) {
+                  upStartRef.current = null;
+                  lookUpFiredRef.current = false;
+                } else if (
+                  isUp &&
+                  wasUp &&
+                  !lookUpFiredRef.current &&
+                  now - (upStartRef.current ?? now) >= cfg.lookUpMinMs
+                ) {
+                  // Sustained — fire once per episode.
+                  lookUpFiredRef.current = true;
+                  onEventRef.current?.({
+                    kind: "lookUp",
+                    durationMs: now - (upStartRef.current ?? now),
+                    at: now,
+                  });
+                }
+              }
 
               setState({
                 ready: true,
                 faceDetected: true,
                 closedness,
                 isClosed,
-                closedForMs,
+                closedForMs:
+                  closedStartRef.current !== null
+                    ? now - closedStartRef.current
+                    : 0,
+                upness,
+                isLookingUp: upStartRef.current !== null,
+                upForMs:
+                  upStartRef.current !== null ? now - upStartRef.current : 0,
                 error: null,
               });
             }
@@ -206,9 +273,6 @@ export function useBlink({
       cancelled = true;
       if (rafId !== null) cancelAnimationFrame(rafId);
     };
-    // We deliberately depend only on `enabled` + the video element ref's
-    // .current — config changes are picked up via the cfg snapshot at the
-    // start of each effect run.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, videoRef]);
 
