@@ -22,8 +22,12 @@ export function CameraView({ onReady }: Props) {
   // re-render hands us a new function reference, our effect tears down (which
   // stops the MediaStream tracks!) and re-acquires the camera — visible to
   // the user as the video flickering off/on.
+  // The ref is updated in an effect rather than during render so the new
+  // react-hooks/refs lint is happy and we follow React 19 conventions.
   const onReadyRef = useRef(onReady);
-  onReadyRef.current = onReady;
+  useEffect(() => {
+    onReadyRef.current = onReady;
+  });
 
   useEffect(() => {
     let cancelled = false;

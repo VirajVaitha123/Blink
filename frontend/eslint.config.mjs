@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Static assets — not application source. We self-host the MediaPipe
+    // WASM bundle here and don't want to lint a third-party prebuilt blob.
+    "public/**",
   ]),
 ]);
 
