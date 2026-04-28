@@ -13,9 +13,14 @@
  */
 "use client";
 
-import { useEffect, useReducer, useRef } from "react";
+import { useEffect, useReducer } from "react";
 
-import { DEFAULT_COMMANDS, DEFAULT_GROUPS, type Command, type Group } from "./layouts";
+import {
+  DEFAULT_COMMANDS,
+  DEFAULT_GROUPS,
+  type Command,
+  type Group,
+} from "./layouts";
 import {
   initialState,
   reduce,
@@ -40,17 +45,12 @@ export function useScanner({
   state: ScannerState;
   dispatch: (action: ScannerAction) => void;
 } {
-  const groupsRef = useRef(groups);
-  groupsRef.current = groups;
-  const commandsRef = useRef(commands);
-  commandsRef.current = commands;
-
+  // Capture groups/commands directly via closure rather than stashing them
+  // in a ref during render — React uses the latest reducer passed to
+  // useReducer on each dispatch, so changes here propagate to the next
+  // action without needing mutable refs.
   const [state, dispatchInternal] = useReducer(
-    (s: ScannerState, a: ScannerAction) =>
-      reduce(s, a, {
-        groups: groupsRef.current,
-        commands: commandsRef.current,
-      }),
+    (s: ScannerState, a: ScannerAction) => reduce(s, a, { groups, commands }),
     undefined,
     initialState,
   );
@@ -58,7 +58,10 @@ export function useScanner({
   // Run the cursor tick only while actively scanning.
   useEffect(() => {
     if (state.phase === "idle") return;
-    const id = window.setInterval(() => dispatchInternal({ type: "tick" }), scanMs);
+    const id = window.setInterval(
+      () => dispatchInternal({ type: "tick" }),
+      scanMs,
+    );
     return () => window.clearInterval(id);
   }, [state.phase, scanMs]);
 

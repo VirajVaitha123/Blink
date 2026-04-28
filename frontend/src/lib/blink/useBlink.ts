@@ -98,8 +98,13 @@ export function useBlink({
     error: null,
   });
 
+  // Always-fresh callback ref. Update in an effect (not during render) so
+  // the react-hooks/refs lint is happy; the rAF tick reads `.current` from
+  // event-loop-time, by which point the latest update has committed.
   const onEventRef = useRef(onEvent);
-  onEventRef.current = onEvent;
+  useEffect(() => {
+    onEventRef.current = onEvent;
+  });
 
   // Blink-episode tracking
   const closedStartRef = useRef<number | null>(null);
