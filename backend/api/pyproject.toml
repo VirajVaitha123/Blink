@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "blink-api"
+version = "0.1.0"
+description = "FastAPI backend for Blink"
+requires-python = ">=3.11"
+dependencies = [
+    # Workspace shared package
+    "blink_shared",
+
+    # Server
+    "fastapi[standard]>=0.115.0",
+    "uvicorn>=0.30.0",
+
+    # Async DB driver (used for pg_notify LISTEN/NOTIFY in SSE handler)
+    "asyncpg>=0.29.0",
+]
+
+[tool.uv.sources]
+blink_shared = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]

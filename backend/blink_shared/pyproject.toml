@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "blink_shared"
+version = "0.1.0"
+description = "Shared modules for Blink (models, services, config)"
+requires-python = ">=3.11"
+dependencies = [
+    # Configuration
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.0.0",
+
+    # Database
+    "sqlmodel>=0.0.31",
+    "psycopg2-binary>=2.9.0",
+    "sqlalchemy>=2.0.0",
+]
+
+# CRITICAL: Flat layout configuration
+# The package lives at the root of the directory, not in a src/ subdirectory
+[tool.setuptools]
+packages = [
+    "blink_shared",
+    "blink_shared.models",
+    "blink_shared.models.tables",
+    "blink_shared.services",
+    "blink_shared.utils",
+]
+
+[tool.setuptools.package-dir]
+blink_shared = "."
