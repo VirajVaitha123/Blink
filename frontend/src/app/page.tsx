@@ -20,7 +20,11 @@ import { useScanner } from "@/lib/scanner/useScanner";
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
-  const [scanMs, setScanMs] = useState(1500);
+  // 1100ms is ~27% faster than the original 1500ms default; brisk enough
+  // that an experienced user isn't waiting between groups, but still well
+  // above the slider's 500ms floor for users who need more time. Tunable
+  // live via the ScanSpeedControl slider (500–3000ms).
+  const [scanMs, setScanMs] = useState(1100);
 
   const { state, dispatch } = useScanner({
     scanMs,
