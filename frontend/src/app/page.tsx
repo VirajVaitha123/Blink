@@ -16,6 +16,10 @@ import {
 } from "@/lib/blink/useBlink";
 import { DEFAULT_COMMANDS, DEFAULT_GROUPS } from "@/lib/scanner/layouts";
 import { useScanner } from "@/lib/scanner/useScanner";
+import { useVoiceCues } from "@/lib/voice/useVoiceCues";
+
+// Stable identity so useVoiceCues' prewarm effect doesn't re-run each render.
+const VOICE_CUES = ["Starting", "Opened menu"] as const;
 
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -32,13 +36,20 @@ export default function Home() {
     commands: DEFAULT_COMMANDS,
   });
 
+  const speak = useVoiceCues(VOICE_CUES);
+
   const handleBlinkEvent = useCallback(
     (event: BlinkEvent) => {
       if (event.kind === "long") {
-        if (state.phase === "idle") dispatch({ type: "start" });
-        else if (state.phase === "commandScan")
+        if (state.phase === "idle") {
+          dispatch({ type: "start" });
+          void speak("Starting");
+        } else if (state.phase === "commandScan") {
           dispatch({ type: "exitCommands" });
-        else dispatch({ type: "enterCommands" });
+        } else {
+          dispatch({ type: "enterCommands" });
+          void speak("Opened menu");
+        }
         return;
       }
       if (event.kind === "intent") {
@@ -49,7 +60,7 @@ export default function Home() {
         dispatch({ type: "insertChar", char: " " });
       }
     },
-    [dispatch, state.phase],
+    [dispatch, speak, state.phase],
   );
 
   const blink = useBlink({
