@@ -41,6 +41,33 @@ export function useVoiceCues(prewarm: readonly string[] = []) {
     }
   }, [prewarm, fetchUrl]);
 
+  // Browsers require a real user gesture (click / key / touch) before
+  // Audio.play() will run. A long-blink isn't a gesture in the browser's
+  // eyes, so without this the very first cue silently fails. We listen
+  // once for any interaction and play+immediately-pause a muted Audio to
+  // unlock playback for the rest of the session.
+  useEffect(() => {
+    let unlocked = false;
+    const unlock = () => {
+      if (unlocked) return;
+      unlocked = true;
+      const a = new Audio();
+      a.muted = true;
+      a.play().catch(() => {});
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+      window.removeEventListener("touchstart", unlock);
+    };
+    window.addEventListener("pointerdown", unlock);
+    window.addEventListener("keydown", unlock);
+    window.addEventListener("touchstart", unlock);
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+      window.removeEventListener("touchstart", unlock);
+    };
+  }, []);
+
   useEffect(() => {
     const cache = cacheRef.current;
     return () => {
@@ -53,8 +80,6 @@ export function useVoiceCues(prewarm: readonly string[] = []) {
     async (text: string) => {
       try {
         const url = await fetchUrl(text);
-        // Cancel any in-flight cue so back-to-back transitions don't
-        // overlap — the latest one wins.
         if (currentRef.current) {
           currentRef.current.pause();
           currentRef.current.currentTime = 0;

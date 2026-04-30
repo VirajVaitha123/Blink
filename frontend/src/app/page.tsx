@@ -19,7 +19,7 @@ import { useScanner } from "@/lib/scanner/useScanner";
 import { useVoiceCues } from "@/lib/voice/useVoiceCues";
 
 // Stable identity so useVoiceCues' prewarm effect doesn't re-run each render.
-const VOICE_CUES = ["Starting", "Opened menu"] as const;
+const VOICE_CUES = ["Starting", "Opened menu", "Resumed"] as const;
 
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -46,6 +46,7 @@ export default function Home() {
           void speak("Starting");
         } else if (state.phase === "commandScan") {
           dispatch({ type: "exitCommands" });
+          void speak("Resumed");
         } else {
           dispatch({ type: "enterCommands" });
           void speak("Opened menu");
@@ -53,14 +54,24 @@ export default function Home() {
         return;
       }
       if (event.kind === "intent") {
-        if (state.phase !== "idle") dispatch({ type: "select" });
+        if (state.phase === "idle") return;
+        // Selecting "Resume" from the command menu also returns to
+        // scanning — speak the same cue so the audio is consistent
+        // regardless of whether the user long-blinked or selected it.
+        if (
+          state.phase === "commandScan" &&
+          DEFAULT_COMMANDS[state.cursor]?.id === "resume"
+        ) {
+          void speak("Resumed");
+        }
+        dispatch({ type: "select" });
         return;
       }
       if (event.kind === "lookUp") {
         dispatch({ type: "insertChar", char: " " });
       }
     },
-    [dispatch, speak, state.phase],
+    [dispatch, speak, state],
   );
 
   const blink = useBlink({

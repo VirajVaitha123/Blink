@@ -12,10 +12,42 @@
 
 export const runtime = "nodejs";
 
-const ELEVENLABS_URL = "https://api.elevenlabs.io/v1/text-to-speech";
-// Rachel — a stock ElevenLabs voice that doesn't require a custom voice
-// in the user's account. Override with ELEVENLABS_VOICE_ID if desired.
-const DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
+const ELEVENLABS_BASE = "https://api.elevenlabs.io/v1";
+
+// Free-tier ElevenLabs keys can only use the account's "default" voices
+// (category="premade") — voices added from the public library or marked
+// professional return 402. If ELEVENLABS_VOICE_ID isn't set we fetch the
+// voice list once, pick the first premade voice, and cache it.
+let cachedVoiceId: string | null = null;
+async function resolveVoiceId(apiKey: string): Promise<string> {
+  if (process.env.ELEVENLABS_VOICE_ID) return process.env.ELEVENLABS_VOICE_ID;
+  if (cachedVoiceId) return cachedVoiceId;
+  const res = await fetch(`${ELEVENLABS_BASE}/voices`, {
+    headers: { "xi-api-key": apiKey },
+  });
+  if (!res.ok) {
+    throw new Error(`voices ${res.status}: ${await res.text().catch(() => "")}`);
+  }
+  const data = (await res.json()) as {
+    voices?: Array<{ voice_id: string; category?: string; name?: string }>;
+  };
+  const voices = data.voices ?? [];
+  // Free-tier compatible categories, in preference order.
+  const premade = voices.find((v) => v.category === "premade");
+  const generated = voices.find((v) => v.category === "generated");
+  const cloned = voices.find((v) => v.category === "cloned");
+  const pick = premade ?? generated ?? cloned;
+  if (!pick) {
+    throw new Error(
+      `no free-tier voices on this account (found ${voices.length} voices, none premade/generated/cloned)`,
+    );
+  }
+  console.log(
+    `[tts] using voice "${pick.name}" (${pick.category}) ${pick.voice_id}`,
+  );
+  cachedVoiceId = pick.voice_id;
+  return pick.voice_id;
+}
 
 export async function POST(request: Request) {
   const apiKey = process.env.ELEVENLABS_API_KEY;
@@ -35,9 +67,17 @@ export async function POST(request: Request) {
     });
   }
 
-  const voiceId = process.env.ELEVENLABS_VOICE_ID ?? DEFAULT_VOICE_ID;
+  let voiceId: string;
+  try {
+    voiceId = await resolveVoiceId(apiKey);
+  } catch (err) {
+    console.error(`[tts] could not resolve voice: ${(err as Error).message}`);
+    return new Response(`could not resolve voice: ${(err as Error).message}`, {
+      status: 502,
+    });
+  }
   const upstream = await fetch(
-    `${ELEVENLABS_URL}/${voiceId}?output_format=mp3_44100_128`,
+    `${ELEVENLABS_BASE}/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
     {
       method: "POST",
       headers: {
@@ -47,6 +87,9 @@ export async function POST(request: Request) {
       },
       body: JSON.stringify({
         text,
+        // eleven_flash_v2_5 is the lowest-latency model (~75ms TTFB).
+        // The cues are 1-3 words so quality difference is negligible
+        // and snappiness matters far more than fidelity.
         model_id: "eleven_flash_v2_5",
       }),
     },
@@ -54,6 +97,9 @@ export async function POST(request: Request) {
 
   if (!upstream.ok || !upstream.body) {
     const detail = await upstream.text().catch(() => "");
+    console.error(
+      `[tts] ElevenLabs ${upstream.status} for voice=${voiceId}: ${detail}`,
+    );
     return new Response(`tts upstream ${upstream.status}: ${detail}`, {
       status: 502,
     });
