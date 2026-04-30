@@ -20,11 +20,11 @@ type FlatKey = {
 };
 
 /**
- * Renders the scanner keyboard. The data model is N groups × M chars (each
- * group is the unit of group-scan); we lay them out in an 8-column grid for
- * a more keyboard-like presentation. Color still cycles per group, so two
- * adjacent groups on the same visual row get different colours and the
- * scanning rhythm stays clear.
+ * Renders the scanner keyboard in a single 8-column grid. Logical groups of
+ * 4 are rendered side-by-side on the same visual row; colour still cycles
+ * per logical group so two adjacent groups on one row get different colours
+ * and the scanning rhythm stays clear. Compact enough that the whole
+ * keyboard sits on a laptop screen without scrolling.
  */
 export function ScanGrid({ groups, state }: Props) {
   const flat = useMemo<FlatKey[]>(

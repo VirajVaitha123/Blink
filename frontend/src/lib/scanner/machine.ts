@@ -11,7 +11,9 @@
  *
  * Long-blink while scanning enters commandScan; long-blink in commandScan
  * cancels back to groupScan. Look-up gesture inserts a space without
- * changing the scanner phase (handled via the `insertChar` action).
+ * changing the scanner phase (handled via the `insertChar` action). The
+ * MENU key (☰) in the last row is equivalent to a long blink — picking
+ * it transitions to commandScan.
  *
  * The machine is pure: it takes the previous state + an action + config
  * and returns the next state. Tick scheduling lives in `useScanner.ts`.
@@ -21,6 +23,7 @@ import {
   type Command,
   type Group,
   BACKSPACE,
+  MENU,
   SPACE,
 } from "./layouts";
 
@@ -110,7 +113,16 @@ export function reduce(
       }
       if (state.phase === "letterScan") {
         const ch = groups[state.groupIndex][state.cursor];
-        return { phase: "groupScan", text: applyChar(state.text, ch), cursor: 0 };
+        // The MENU key acts like a long blink: open the command menu
+        // without committing any text.
+        if (ch === MENU) {
+          return { phase: "commandScan", text: state.text, cursor: 0 };
+        }
+        return {
+          phase: "groupScan",
+          text: applyChar(state.text, ch),
+          cursor: 0,
+        };
       }
       if (state.phase === "commandScan") {
         return runCommand(state, commands[state.cursor]);
@@ -136,7 +148,15 @@ function runCommand(
     case "stop":
       return { phase: "idle", text: state.text };
     case "backspace":
-      return { phase: "groupScan", text: state.text.slice(0, -1), cursor: 0 };
+      // Stay in the menu so consecutive backspaces are easy. Reset cursor
+      // to position 0 (Resume) — the safest default after a destructive
+      // action; the user must actively wait for the cursor to cycle back
+      // to Backspace to delete another character.
+      return {
+        phase: "commandScan",
+        text: state.text.slice(0, -1),
+        cursor: 0,
+      };
     case "clear":
       return { phase: "idle", text: "" };
   }
