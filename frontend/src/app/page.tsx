@@ -93,11 +93,11 @@ export default function Home() {
 function PageHeader({ phase }: { phase: ReturnType<typeof useScanner>["state"]["phase"] }) {
   const phaseLabel =
     phase === "idle"
-      ? "Hold a blink for 2s — or press Start"
+      ? "Hold a blink for 1.5s — or press Start"
       : phase === "groupScan"
-        ? "Scanning groups — blink to lock, hold for menu"
+        ? "Scanning groups — blink to lock, hold or pick ☰ for menu"
         : phase === "letterScan"
-          ? "Scanning letters — blink to commit, hold for menu"
+          ? "Scanning letters — blink to commit, hold or pick ☰ for menu"
           : "Command menu — blink to run, hold to cancel";
 
   return (

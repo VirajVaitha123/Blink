@@ -1,13 +1,17 @@
 /**
  * Letter group layouts and command list for row-column scanning.
  *
- * The default group layout mirrors what his sister does manually: groups of 4,
- * alphabetical. The last group bundles Y/Z with space and backspace so they
- * can still be selected if the look-up gesture isn't usable for the user.
+ * 7 groups of 4 letters (alphabetical), with the last group also carrying
+ * SPACE / BACKSPACE / MENU so they're reachable via the scanner. Space is
+ * primarily entered with the look-up gesture; selecting it from the grid
+ * is the fallback path. The MENU key is a shortcut into the command menu —
+ * equivalent to a long blink, but reachable without holding the eyes closed.
  */
 
 export const SPACE = "␣";
 export const BACKSPACE = "⌫";
+/** Selecting this character opens the command menu (alternative to long blink). */
+export const MENU = "☰";
 
 export type Group = readonly string[];
 
@@ -18,7 +22,7 @@ export const DEFAULT_GROUPS: readonly Group[] = [
   ["M", "N", "O", "P"],
   ["Q", "R", "S", "T"],
   ["U", "V", "W", "X"],
-  ["Y", "Z", SPACE, BACKSPACE],
+  ["Y", "Z", SPACE, BACKSPACE, MENU],
 ] as const;
 
 /**
@@ -37,8 +41,9 @@ export const HIGHLIGHT_COLORS = [
 ] as const;
 
 /**
- * Command menu — entered via long blink while scanning. The first item is
- * Resume so an accidental long blink can be cancelled with one quick blink.
+ * Command menu — entered via long blink while scanning, or via the ☰ key
+ * in the last row. Resume is first so a quick blink cycle exits cleanly
+ * without running anything destructive.
  */
 export type CommandEffect = "resume" | "stop" | "clear" | "backspace";
 

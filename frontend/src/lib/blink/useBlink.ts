@@ -47,7 +47,10 @@ export const DEFAULT_BLINK_CONFIG: BlinkConfig = {
   closedThreshold: 0.5,
   openThreshold: 0.35,
   intentMinMs: 200,
-  longMinMs: 2000,
+  // 1500ms felt the right point in testing — comfortably above the
+  // intent threshold (200ms) so accidental fires are unlikely, but short
+  // enough that opening the command menu mid-scan doesn't feel laborious.
+  longMinMs: 1500,
   // Look-up: MediaPipe's eyeLookUp blendshapes measure iris rotation
   // relative to the head, not absolute gaze. Pure eye-look-up at a screen
   // typically peaks around 0.4-0.5 (you don't need to roll your eyes far
