@@ -19,7 +19,7 @@ import { useScanner } from "@/lib/scanner/useScanner";
 import { useVoiceCues } from "@/lib/voice/useVoiceCues";
 
 // Stable identity so useVoiceCues' prewarm effect doesn't re-run each render.
-const VOICE_CUES = ["Starting", "Opened menu", "Resumed"] as const;
+const VOICE_CUES = ["Starting", "Opened menu", "Resumed", "Space"] as const;
 
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -69,6 +69,7 @@ export default function Home() {
       }
       if (event.kind === "lookUp") {
         dispatch({ type: "insertChar", char: " " });
+        void speak("Space");
       }
     },
     [dispatch, speak, state],
