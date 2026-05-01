@@ -1,6 +1,6 @@
 "use client";
 
-import { HIGHLIGHT_COLORS, type Command } from "@/lib/scanner/layouts";
+import { type Command, type CommandEffect } from "@/lib/scanner/layouts";
 import type { ScannerState } from "@/lib/scanner/machine";
 
 import { Card, CardHeader } from "./Card";
@@ -8,6 +8,16 @@ import { Card, CardHeader } from "./Card";
 type Props = {
   commands: readonly Command[];
   state: ScannerState;
+};
+
+// Semantic command colours: green = safe / continue, red = destructive,
+// blue/purple = neutral edits. Falls back to slate if a new command id
+// is added without an entry here.
+const COMMAND_COLORS: Record<CommandEffect, string> = {
+  resume: "#22c55e", // green-500
+  stop: "#ef4444", // red-500
+  backspace: "#3b82f6", // blue-500
+  clear: "#a855f7", // purple-500
 };
 
 /**
@@ -31,7 +41,7 @@ export function CommandBar({ commands, state }: Props) {
       <div className="mt-3 flex flex-wrap gap-2">
         {commands.map((cmd, i) => {
           const isActive = active && state.cursor === i;
-          const color = HIGHLIGHT_COLORS[i % HIGHLIGHT_COLORS.length];
+          const color = COMMAND_COLORS[cmd.id] ?? "#64748b";
           return (
             <div
               key={cmd.id}

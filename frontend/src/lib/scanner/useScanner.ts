@@ -13,7 +13,7 @@
  */
 "use client";
 
-import { useEffect, useReducer } from "react";
+import { useEffect, useReducer, useRef } from "react";
 
 import {
   DEFAULT_COMMANDS,
@@ -31,6 +31,13 @@ import {
 export type UseScannerOptions = {
   /** Time between cursor advances, in ms. */
   scanMs?: number;
+  /**
+   * Extra time before the first tick when entering a fresh scan phase
+   * (idle → groupScan, or any → commandScan). Gives the user a moment
+   * to react to the audio cue ("Starting" / "Opened menu") that fires
+   * on those transitions.
+   */
+  headstartMs?: number;
   /** Letter group layout. Defaults to the alphabetical 4-letter groups. */
   groups?: readonly Group[];
   /** Command list shown in commandScan. */
@@ -39,31 +46,49 @@ export type UseScannerOptions = {
 
 export function useScanner({
   scanMs = 1500,
+  headstartMs = 700,
   groups = DEFAULT_GROUPS,
   commands = DEFAULT_COMMANDS,
 }: UseScannerOptions = {}): {
   state: ScannerState;
   dispatch: (action: ScannerAction) => void;
 } {
-  // Capture groups/commands directly via closure rather than stashing them
-  // in a ref during render — React uses the latest reducer passed to
-  // useReducer on each dispatch, so changes here propagate to the next
-  // action without needing mutable refs.
   const [state, dispatchInternal] = useReducer(
     (s: ScannerState, a: ScannerAction) => reduce(s, a, { groups, commands }),
     undefined,
     initialState,
   );
 
-  // Run the cursor tick only while actively scanning.
+  // Track the phase we last scheduled a tick from so we can detect when
+  // we're entering a fresh scan vs. cycling within one. Internal cycles
+  // (groupScan ↔ letterScan, command resume → groupScan) shouldn't get
+  // the head-start delay; only voice-cued entries do.
+  const prevPhaseRef = useRef<ScannerState["phase"]>("idle");
+
   useEffect(() => {
+    const prev = prevPhaseRef.current;
+    prevPhaseRef.current = state.phase;
     if (state.phase === "idle") return;
-    const id = window.setInterval(
-      () => dispatchInternal({ type: "tick" }),
-      scanMs,
-    );
-    return () => window.clearInterval(id);
-  }, [state.phase, scanMs]);
+
+    const cuedEntry =
+      (prev === "idle" && state.phase === "groupScan") ||
+      (prev !== "commandScan" && state.phase === "commandScan");
+    const firstTickDelay = scanMs + (cuedEntry ? headstartMs : 0);
+
+    let intervalId: number | undefined;
+    const timeoutId = window.setTimeout(() => {
+      dispatchInternal({ type: "tick" });
+      intervalId = window.setInterval(
+        () => dispatchInternal({ type: "tick" }),
+        scanMs,
+      );
+    }, firstTickDelay);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      if (intervalId !== undefined) window.clearInterval(intervalId);
+    };
+  }, [state.phase, scanMs, headstartMs]);
 
   return { state, dispatch: dispatchInternal };
 }
