@@ -46,7 +46,11 @@ export type BlinkConfig = {
 export const DEFAULT_BLINK_CONFIG: BlinkConfig = {
   closedThreshold: 0.5,
   openThreshold: 0.35,
-  intentMinMs: 200,
+  // 150ms is just above the natural involuntary-blink range (~100-130ms)
+  // so reflex blinks rarely fire selections, but a deliberate quick blink
+  // still registers — important for users (or rows like Y/Z/⌫/☰) where
+  // pacing matters and a 200ms hold felt sluggish in testing.
+  intentMinMs: 150,
   // 1500ms felt the right point in testing — comfortably above the
   // intent threshold (200ms) so accidental fires are unlikely, but short
   // enough that opening the command menu mid-scan doesn't feel laborious.

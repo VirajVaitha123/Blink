@@ -19,16 +19,16 @@ import { useScanner } from "@/lib/scanner/useScanner";
 import { useVoiceCues } from "@/lib/voice/useVoiceCues";
 
 // Stable identity so useVoiceCues' prewarm effect doesn't re-run each render.
-const VOICE_CUES = ["Starting", "Opened menu", "Resumed"] as const;
+const VOICE_CUES = ["Starting", "Opened menu", "Resumed", "Space"] as const;
 
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
-  // 1100ms is ~27% faster than the original 1500ms default; brisk enough
-  // that an experienced user isn't waiting between groups, but still well
-  // above the slider's 500ms floor for users who need more time. Tunable
-  // live via the ScanSpeedControl slider (500–3000ms).
-  const [scanMs, setScanMs] = useState(1100);
+  // 1200ms gives a slightly more comfortable rhythm than the prior 1100ms,
+  // particularly on the longer last row (5 items: Y/Z/␣/⌫/☰). Still well
+  // under the original 1500ms default and tunable live via the slider
+  // (500–3000ms).
+  const [scanMs, setScanMs] = useState(1200);
 
   const { state, dispatch } = useScanner({
     scanMs,
@@ -69,6 +69,7 @@ export default function Home() {
       }
       if (event.kind === "lookUp") {
         dispatch({ type: "insertChar", char: " " });
+        void speak("Space");
       }
     },
     [dispatch, speak, state],
