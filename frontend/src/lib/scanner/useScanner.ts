@@ -2,14 +2,16 @@
  * React hook that hosts the scanner state machine and drives its tick.
  *
  * Inputs are pushed in via `dispatch` from page-level event handlers:
- *   - intent blink                    → dispatch({ type: "select" })
- *   - long blink while idle           → dispatch({ type: "start" })
- *   - long blink while scanning       → dispatch({ type: "enterCommands" })
- *   - long blink while in commandScan → dispatch({ type: "exitCommands" })
- *   - look-up gesture                 → dispatch({ type: "insertChar", char: " " })
+ *   - intent blink                       → dispatch({ type: "select" })
+ *   - long blink while idle              → dispatch({ type: "start" })
+ *   - long blink while scanning          → dispatch({ type: "enterCommands" })
+ *   - long blink while in commandScan    → dispatch({ type: "exitCommands" })
+ *   - long blink while in suggestionScan → dispatch({ type: "exitSuggestions" })
+ *   - look-up gesture                    → dispatch({ type: "insertChar", char: " " })
+ *   - look-right (held to fill)          → dispatch({ type: "enterSuggestions", ... })
  *
- * The tick interval runs only while we're in a scanning phase
- * (groupScan / letterScan / commandScan).
+ * The tick interval runs in any non-idle phase (groupScan / letterScan /
+ * commandScan / suggestionScan), all using the same `scanMs` cadence.
  */
 "use client";
 
@@ -72,7 +74,8 @@ export function useScanner({
 
     const cuedEntry =
       (prev === "idle" && state.phase === "groupScan") ||
-      (prev !== "commandScan" && state.phase === "commandScan");
+      (prev !== "commandScan" && state.phase === "commandScan") ||
+      (prev !== "suggestionScan" && state.phase === "suggestionScan");
     const firstTickDelay = scanMs + (cuedEntry ? headstartMs : 0);
 
     let intervalId: number | undefined;
