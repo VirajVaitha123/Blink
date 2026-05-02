@@ -1,14 +1,17 @@
 "use client";
 
+import { memo } from "react";
+
+import type { BlinkRuntime } from "@/lib/blink/useBlink";
+import { useBlinkMetric } from "@/lib/blink/useBlinkMetric";
+
 import { Card, CardHeader } from "./Card";
 
 type Props = {
   /** Top-k suggestions; frozen on suggestionScan entry, live otherwise. */
   suggestions: readonly string[];
-  /** Live duration the user has been holding gaze right (from useBlink). */
-  rightForMs: number;
-  /** Whether the user is currently holding gaze right. */
-  isLookingRight: boolean;
+  /** Subscribable runtime; used by the inner DwellFill child. */
+  blink: BlinkRuntime;
   /** lookRight hold-to-fill threshold from useBlink config. */
   holdMs: number;
   /**
@@ -23,33 +26,25 @@ type Props = {
 
 const HIGHLIGHT_COLOR = "#06b6d4"; // cyan-500, matches the play command pill
 
-export function SuggestionStrip({
+function SuggestionStripInner({
   suggestions,
-  rightForMs,
-  isLookingRight,
+  blink,
   holdMs,
   activeIndex,
   loading = false,
 }: Props) {
   const inPicker = activeIndex !== null;
-  // Single fill bar across the whole card body — the dwell-to-enter
-  // affordance. Hidden once the picker opens; the active-chip cursor
-  // takes over from there.
-  const showFill = !inPicker && isLookingRight && suggestions.length > 0;
-  const fillFraction = showFill ? Math.min(1, rightForMs / holdMs) : 0;
+  const showFill = !inPicker && blink.isLookingRight && suggestions.length > 0;
 
   return (
     <Card
       className="relative overflow-hidden p-4"
       active={inPicker || showFill}
     >
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-y-0 left-0 transition-[width] duration-75"
-        style={{
-          width: `${fillFraction * 100}%`,
-          backgroundColor: "rgba(6,182,212,0.18)",
-        }}
+      <DwellFill
+        blink={blink}
+        holdMs={holdMs}
+        enabled={showFill}
       />
       <div className="relative">
         <CardHeader
@@ -81,6 +76,36 @@ export function SuggestionStrip({
         </div>
       </div>
     </Card>
+  );
+}
+
+export const SuggestionStrip = memo(SuggestionStripInner);
+
+/**
+ * The dwell-fill bar — the only part of the strip that needs to re-render
+ * while the user holds gaze right. Subscribes to `rightForMs` directly so
+ * the parent strip stays still during the fill animation.
+ */
+function DwellFill({
+  blink,
+  holdMs,
+  enabled,
+}: {
+  blink: BlinkRuntime;
+  holdMs: number;
+  enabled: boolean;
+}) {
+  const rightForMs = useBlinkMetric(blink, (m) => m.rightForMs);
+  const fraction = enabled ? Math.min(1, rightForMs / holdMs) : 0;
+  return (
+    <div
+      aria-hidden
+      className="pointer-events-none absolute inset-y-0 left-0 transition-[width] duration-75"
+      style={{
+        width: `${fraction * 100}%`,
+        backgroundColor: "rgba(6,182,212,0.18)",
+      }}
+    />
   );
 }
 

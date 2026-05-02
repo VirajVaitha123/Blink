@@ -8,6 +8,13 @@ const WORDLIST_URL = "/wordlist.json";
 const STORAGE_KEY_PERSONAL = "blink.predictor.personal.v1";
 const STORAGE_KEY_BIGRAMS = "blink.predictor.bigrams.v1";
 
+// Build the trie in slices of this many words, yielding to the main thread
+// between slices. ~10k words / 1k = ~10 yields, each one giving the
+// scheduler a chance to paint or run the MediaPipe rAF tick. With one
+// big synchronous load() the cold-start jank was visible for ~80ms; with
+// chunking it's spread invisibly across a couple of frames.
+const TRIE_BUILD_CHUNK = 1000;
+
 // Module-level singleton, instantiated synchronously so cold-start
 // suggestions (SENTENCE_STARTERS, bigrams) are available on the very
 // first render — these paths don't need the wordlist trie. The wordlist
@@ -26,11 +33,32 @@ function ensureWordlistLoaded(): Promise<void> {
         );
       }
       const data: ReadonlyArray<WordlistEntry> = await res.json();
-      predictorInstance.load(data);
+      // Build in slices, yielding between each, so the ~80ms of synchronous
+      // trie work doesn't block MediaPipe's rAF tick during cold-start.
+      for (let i = 0; i < data.length; i += TRIE_BUILD_CHUNK) {
+        predictorInstance.load(data.slice(i, i + TRIE_BUILD_CHUNK));
+        if (i + TRIE_BUILD_CHUNK < data.length) {
+          await yieldToMain();
+        }
+      }
       wordlistLoaded = true;
     })();
   }
   return wordlistLoadPromise;
+}
+
+function yieldToMain(): Promise<void> {
+  // requestIdleCallback is ideal but Safari doesn't ship it; setTimeout(0)
+  // is a fine fallback — it gives the scheduler a microtask boundary.
+  return new Promise((resolve) => {
+    if (typeof window !== "undefined" && "requestIdleCallback" in window) {
+      (window as Window & {
+        requestIdleCallback: (cb: () => void) => void;
+      }).requestIdleCallback(() => resolve());
+    } else {
+      setTimeout(resolve, 0);
+    }
+  });
 }
 
 let personalHydrated = false;
@@ -125,5 +153,11 @@ export function usePredictor(
     }
   }, []);
 
-  return { ready, suggestions, commit, error };
+  // Memoise so consumers (useEffect deps, useCallback deps) get a stable
+  // reference unless something actually changed. Without this, every
+  // parent render produced a fresh object, defeating downstream memo.
+  return useMemo<UsePredictorResult>(
+    () => ({ ready, suggestions, commit, error }),
+    [ready, suggestions, commit, error],
+  );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { BlinkStatus } from "@/components/BlinkStatus";
 import { CameraView } from "@/components/CameraView";
@@ -52,78 +52,110 @@ export default function Home() {
   // on mount, then every keystroke scores in microseconds.
   const predictor = usePredictor(state.text);
 
-  const handleBlinkEvent = useCallback(
-    (event: BlinkEvent) => {
-      if (event.kind === "long") {
-        if (state.phase === "idle") {
-          dispatch({ type: "start" });
-          void speak("Starting");
-        } else if (state.phase === "commandScan") {
-          dispatch({ type: "exitCommands" });
+  // Refs let `handleBlinkEvent` be a stable identity. Without this,
+  // including `state` and `predictor` in its deps rebuilt the callback
+  // on every render — and useBlink would then re-run its onEvent ref
+  // assignment unnecessarily. Stable identity also means `useCallback`
+  // here actually does something downstream.
+  const stateRef = useRef(state);
+  const predictorRef = useRef(predictor);
+  const dispatchRef = useRef(dispatch);
+  const speakRef = useRef(speak);
+  useEffect(() => {
+    stateRef.current = state;
+    predictorRef.current = predictor;
+    dispatchRef.current = dispatch;
+    speakRef.current = speak;
+  });
+
+  // The "system ready" gate. We refuse to act on any blink event until
+  // every dependency is loaded: camera streaming, MediaPipe model in
+  // memory, wordlist trie populated. Before this, even if the user is
+  // already gesturing (e.g. holding gaze right while the page warms up),
+  // we silently swallow the event so it doesn't kick the scanner into a
+  // half-initialised state.
+  const blinkReadyRef = useRef(false);
+
+  const handleBlinkEvent = useCallback((event: BlinkEvent) => {
+    if (!blinkReadyRef.current || !predictorRef.current.ready) {
+      // Warming up — drop the event. The user sees the "warming up…"
+      // chip in the suggestion card and the amber "Loading model…"
+      // status dot, so they know to wait.
+      return;
+    }
+    const state = stateRef.current;
+    const predictor = predictorRef.current;
+    const dispatch = dispatchRef.current;
+    const speak = speakRef.current;
+
+    if (event.kind === "long") {
+      if (state.phase === "idle") {
+        dispatch({ type: "start" });
+        void speak("Starting");
+      } else if (state.phase === "commandScan") {
+        dispatch({ type: "exitCommands" });
+        void speak("Resumed");
+      } else if (state.phase === "suggestionScan") {
+        // Long blink while in the suggestion picker drops back to
+        // scanning, mirroring how it cancels the command menu.
+        dispatch({ type: "exitSuggestions" });
+        void speak("Cancelled");
+      } else {
+        dispatch({ type: "enterCommands" });
+        void speak("Opened menu");
+      }
+      return;
+    }
+    if (event.kind === "intent") {
+      if (state.phase === "idle") return;
+      if (state.phase === "commandScan") {
+        const cmd = DEFAULT_COMMANDS[state.cursor];
+        // Selecting "Resume" from the command menu also returns to
+        // scanning — speak the same cue so the audio is consistent
+        // regardless of whether the user long-blinked or selected it.
+        if (cmd?.id === "resume") {
           void speak("Resumed");
-        } else if (state.phase === "suggestionScan") {
-          // Long blink while in the suggestion picker drops back to
-          // scanning, mirroring how it cancels the command menu.
-          dispatch({ type: "exitSuggestions" });
-          void speak("Cancelled");
-        } else {
-          dispatch({ type: "enterCommands" });
-          void speak("Opened menu");
+        } else if (cmd?.id === "play" && state.text.trim().length > 0) {
+          void speak(state.text);
         }
+      } else if (state.phase === "suggestionScan") {
+        // Record the picked word in the predictor's personal/bigram
+        // memory before the reducer swaps the partial for the full
+        // word. parseContext on the *current* text gives us the right
+        // prev word for the bigram update.
+        const word = state.suggestions[state.cursor];
+        if (word) predictor.commit(word);
+      }
+      dispatch({ type: "select" });
+      return;
+    }
+    if (event.kind === "lookUp") {
+      dispatch({ type: "insertChar", char: " " });
+      void speak("Space");
+      return;
+    }
+    if (event.kind === "lookRight") {
+      // Open the picker from any phase that's safe to interrupt: idle,
+      // groupScan, letterScan. Idle is included so a user can begin a
+      // sentence directly with a SENTENCE_STARTERS pick (or a bigram
+      // continuation right after a Clear) without having to long-blink
+      // Start first. commandScan is excluded — a destructive command
+      // shouldn't be sidestepped — and suggestionScan is excluded
+      // because we're already in it.
+      if (
+        state.phase === "commandScan" ||
+        state.phase === "suggestionScan" ||
+        predictor.suggestions.length === 0
+      ) {
         return;
       }
-      if (event.kind === "intent") {
-        if (state.phase === "idle") return;
-        if (state.phase === "commandScan") {
-          const cmd = DEFAULT_COMMANDS[state.cursor];
-          // Selecting "Resume" from the command menu also returns to
-          // scanning — speak the same cue so the audio is consistent
-          // regardless of whether the user long-blinked or selected it.
-          if (cmd?.id === "resume") {
-            void speak("Resumed");
-          } else if (cmd?.id === "play" && state.text.trim().length > 0) {
-            void speak(state.text);
-          }
-        } else if (state.phase === "suggestionScan") {
-          // Record the picked word in the predictor's personal/bigram
-          // memory before the reducer swaps the partial for the full
-          // word. parseContext on the *current* text gives us the right
-          // prev word for the bigram update.
-          const word = state.suggestions[state.cursor];
-          if (word) predictor.commit(word);
-        }
-        dispatch({ type: "select" });
-        return;
-      }
-      if (event.kind === "lookUp") {
-        dispatch({ type: "insertChar", char: " " });
-        void speak("Space");
-        return;
-      }
-      if (event.kind === "lookRight") {
-        // Open the picker from any phase that's safe to interrupt: idle,
-        // groupScan, letterScan. Idle is included so a user can begin a
-        // sentence directly with a SENTENCE_STARTERS pick (or a bigram
-        // continuation right after a Clear) without having to long-blink
-        // Start first. commandScan is excluded — a destructive command
-        // shouldn't be sidestepped — and suggestionScan is excluded
-        // because we're already in it.
-        if (
-          state.phase === "commandScan" ||
-          state.phase === "suggestionScan" ||
-          predictor.suggestions.length === 0
-        ) {
-          return;
-        }
-        dispatch({
-          type: "enterSuggestions",
-          suggestions: predictor.suggestions,
-        });
-        void speak("Suggestions");
-      }
-    },
-    [dispatch, speak, state, predictor],
-  );
+      dispatch({
+        type: "enterSuggestions",
+        suggestions: predictor.suggestions,
+      });
+      void speak("Suggestions");
+    }
+  }, []);
 
   const blink = useBlink({
     videoRef,
@@ -131,9 +163,18 @@ export default function Home() {
     onEvent: handleBlinkEvent,
   });
 
+  // Mirror blink.ready into the ref read by the (stable-identity) event
+  // handler. Discrete state changes are rare so this only fires a handful
+  // of times per session.
+  useEffect(() => {
+    blinkReadyRef.current = blink.ready;
+  }, [blink.ready]);
+
+  const systemReady = cameraReady && blink.ready && predictor.ready;
+
   return (
     <main className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-10 lg:py-12">
-      <PageHeader phase={state.phase} />
+      <PageHeader phase={state.phase} systemReady={systemReady} />
 
       <div className="mt-6 grid gap-5 lg:mt-10 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
         <aside className="space-y-4">
@@ -160,8 +201,7 @@ export default function Home() {
                 ? state.suggestions
                 : predictor.suggestions
             }
-            rightForMs={blink.rightForMs}
-            isLookingRight={blink.isLookingRight}
+            blink={blink}
             holdMs={DEFAULT_BLINK_CONFIG.lookRightHoldMs}
             activeIndex={
               state.phase === "suggestionScan" ? state.cursor : null
@@ -177,9 +217,16 @@ export default function Home() {
   );
 }
 
-function PageHeader({ phase }: { phase: ReturnType<typeof useScanner>["state"]["phase"] }) {
-  const phaseLabel =
-    phase === "idle"
+function PageHeader({
+  phase,
+  systemReady,
+}: {
+  phase: ReturnType<typeof useScanner>["state"]["phase"];
+  systemReady: boolean;
+}) {
+  const phaseLabel = !systemReady
+    ? "Warming up — gestures will start once the camera and model are ready"
+    : phase === "idle"
       ? "Hold a blink for 1.5s — or press Start"
       : phase === "groupScan"
         ? "Scanning groups — blink to lock, hold or pick ☰ for menu"

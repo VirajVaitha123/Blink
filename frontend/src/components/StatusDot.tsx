@@ -1,14 +1,15 @@
 "use client";
 
-import type { BlinkRuntimeState } from "@/lib/blink/useBlink";
+import type { BlinkDiscreteState } from "@/lib/blink/useBlink";
 
 type Props = {
-  blink: BlinkRuntimeState;
+  blink: BlinkDiscreteState;
 };
 
 /**
- * Compact status indicator with a coloured dot + label. Replaces the
- * line-of-text status from the old BlinkStatus.
+ * Compact status indicator with a coloured dot + label. Reads only the
+ * discrete fields (ready / faceDetected / error) so it never re-renders
+ * because a per-frame metric ticked.
  */
 export function StatusDot({ blink }: Props) {
   const { kind, label, dotClass } = describe(blink);
@@ -26,7 +27,7 @@ export function StatusDot({ blink }: Props) {
   );
 }
 
-function describe(blink: BlinkRuntimeState) {
+function describe(blink: BlinkDiscreteState) {
   if (blink.error) {
     return { kind: "error", label: "Error", dotClass: "bg-rose-400" } as const;
   }

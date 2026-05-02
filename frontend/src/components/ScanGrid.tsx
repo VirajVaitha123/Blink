@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 
 import { HIGHLIGHT_COLORS, type Group } from "@/lib/scanner/layouts";
 import type { ScannerState } from "@/lib/scanner/machine";
@@ -12,6 +12,8 @@ type Props = {
   groups: readonly Group[];
   state: ScannerState;
 };
+
+export const ScanGrid = memo(ScanGridInner);
 
 type FlatKey = {
   char: string;
@@ -26,7 +28,7 @@ type FlatKey = {
  * and the scanning rhythm stays clear. Compact enough that the whole
  * keyboard sits on a laptop screen without scrolling.
  */
-export function ScanGrid({ groups, state }: Props) {
+function ScanGridInner({ groups, state }: Props) {
   const flat = useMemo<FlatKey[]>(
     () =>
       groups.flatMap((g, groupIndex) =>

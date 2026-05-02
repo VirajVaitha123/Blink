@@ -1,5 +1,7 @@
 "use client";
 
+import { memo } from "react";
+
 import { Card, CardHeader } from "./Card";
 
 type GestureRow = {
@@ -14,7 +16,9 @@ const GESTURES: readonly GestureRow[] = [
   { gesture: "☰ key", effect: "Open command menu (no holding)" },
 ] as const;
 
-export function GestureLegend() {
+export const GestureLegend = memo(GestureLegendInner);
+
+function GestureLegendInner() {
   return (
     <Card className="p-4">
       <CardHeader title="Gestures" />

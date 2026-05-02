@@ -1,5 +1,7 @@
 "use client";
 
+import { memo } from "react";
+
 import { Card, CardHeader } from "./Card";
 
 type Props = {
@@ -7,7 +9,9 @@ type Props = {
   onChange: (next: number) => void;
 };
 
-export function ScanSpeedControl({ scanMs, onChange }: Props) {
+export const ScanSpeedControl = memo(ScanSpeedControlInner);
+
+function ScanSpeedControlInner({ scanMs, onChange }: Props) {
   // Show 1 decimal when the value is a clean 100ms multiple ("1.1s"),
   // 2 decimals otherwise ("1.05s") so a 50ms-step adjustment is visible.
   const label = `${(scanMs / 1000).toFixed(scanMs % 100 === 0 ? 1 : 2)}s`;

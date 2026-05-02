@@ -15,10 +15,24 @@
  *
  * Each gesture has hysteresis (separate enter/exit thresholds) to keep
  * detection stable as scores wobble around the threshold.
+ *
+ * State is split into two channels:
+ *
+ *   - "discrete" lives in React state and only updates when something flips
+ *     (ready, faceDetected, isClosed, isLookingUp, isLookingRight, error).
+ *     Most components only need this; they don't re-render every frame.
+ *
+ *   - "metrics" lives in a ref + a tiny pub/sub. The MediaPipe rAF tick
+ *     mutates the ref in place and notifies listeners every frame. Any
+ *     component that needs to animate from a continuous value (the dwell
+ *     fill bar, the meter bars, the closedness/upness debug stats) uses
+ *     `useBlinkMetric` to subscribe with throttling. Without this split,
+ *     ~30 setStates per second forced the entire <Home> tree to reconcile
+ *     and made the page feel laggy.
  */
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { extractFaceScores, loadFaceLandmarker } from "./landmarker";
 
@@ -88,21 +102,54 @@ export const DEFAULT_BLINK_CONFIG: BlinkConfig = {
   lookRightHoldMs: 1000,
 };
 
-export type BlinkRuntimeState = {
+/** Discrete state — flips a few times per session, safe to put in setState. */
+export type BlinkDiscreteState = {
   ready: boolean;
   faceDetected: boolean;
-  closedness: number;
   isClosed: boolean;
+  isLookingUp: boolean;
+  isLookingRight: boolean;
+  error: string | null;
+};
+
+/** Continuous per-frame metrics — never goes through React state. */
+export type BlinkMetrics = {
+  closedness: number;
   closedForMs: number;
   upness: number;
-  isLookingUp: boolean;
   upForMs: number;
-  /** Average of eyeLookOutRight + eyeLookInLeft (looking right from user POV). */
   rightness: number;
-  isLookingRight: boolean;
-  /** Live duration the user has been holding gaze right; drives chip cycling. */
   rightForMs: number;
-  error: string | null;
+};
+
+const ZERO_METRICS: BlinkMetrics = {
+  closedness: 0,
+  closedForMs: 0,
+  upness: 0,
+  upForMs: 0,
+  rightness: 0,
+  rightForMs: 0,
+};
+
+const INITIAL_DISCRETE: BlinkDiscreteState = {
+  ready: false,
+  faceDetected: false,
+  isClosed: false,
+  isLookingUp: false,
+  isLookingRight: false,
+  error: null,
+};
+
+export type MetricsListener = (m: Readonly<BlinkMetrics>) => void;
+
+export type BlinkRuntime = BlinkDiscreteState & {
+  /** Read-only handle to the latest metrics. Mutated in place each frame. */
+  readonly metricsRef: { readonly current: Readonly<BlinkMetrics> };
+  /**
+   * Subscribe to per-frame metric updates. Listener is called after each
+   * inference tick with the current metrics. Returns an unsubscribe fn.
+   */
+  subscribeMetrics(listener: MetricsListener): () => void;
 };
 
 export type UseBlinkOptions = {
@@ -117,23 +164,10 @@ export function useBlink({
   enabled,
   config,
   onEvent,
-}: UseBlinkOptions): BlinkRuntimeState {
+}: UseBlinkOptions): BlinkRuntime {
   const cfg = { ...DEFAULT_BLINK_CONFIG, ...config };
 
-  const [state, setState] = useState<BlinkRuntimeState>({
-    ready: false,
-    faceDetected: false,
-    closedness: 0,
-    isClosed: false,
-    closedForMs: 0,
-    upness: 0,
-    isLookingUp: false,
-    upForMs: 0,
-    rightness: 0,
-    isLookingRight: false,
-    rightForMs: 0,
-    error: null,
-  });
+  const [discrete, setDiscrete] = useState<BlinkDiscreteState>(INITIAL_DISCRETE);
 
   // Always-fresh callback ref. Update in an effect (not during render) so
   // the react-hooks/refs lint is happy; the rAF tick reads `.current` from
@@ -142,6 +176,24 @@ export function useBlink({
   useEffect(() => {
     onEventRef.current = onEvent;
   });
+
+  // Per-frame metrics live in a ref so updating them doesn't trigger React
+  // reconciliation. Mutated in place inside the rAF tick.
+  const metricsRef = useRef<BlinkMetrics>({ ...ZERO_METRICS });
+
+  // Listeners for the metrics pub/sub. Stored in a ref so subscribe/notify
+  // don't need to be redeclared between renders.
+  const listenersRef = useRef<Set<MetricsListener>>(new Set());
+
+  const subscribeMetrics = useMemo(
+    () => (listener: MetricsListener) => {
+      listenersRef.current.add(listener);
+      return () => {
+        listenersRef.current.delete(listener);
+      };
+    },
+    [],
+  );
 
   // Blink-episode tracking
   const closedStartRef = useRef<number | null>(null);
@@ -165,11 +217,35 @@ export function useBlink({
     let rafId: number | null = null;
     let lastVideoTime = -1;
 
+    // Tracks the discrete fields we last published, so we only call
+    // setState when something actually flipped — avoids spurious renders.
+    let lastDiscrete: BlinkDiscreteState = INITIAL_DISCRETE;
+
+    const publishDiscreteIfChanged = (next: BlinkDiscreteState) => {
+      if (
+        next.ready === lastDiscrete.ready &&
+        next.faceDetected === lastDiscrete.faceDetected &&
+        next.isClosed === lastDiscrete.isClosed &&
+        next.isLookingUp === lastDiscrete.isLookingUp &&
+        next.isLookingRight === lastDiscrete.isLookingRight &&
+        next.error === lastDiscrete.error
+      ) {
+        return;
+      }
+      lastDiscrete = next;
+      setDiscrete(next);
+    };
+
+    const notifyMetrics = () => {
+      const m = metricsRef.current;
+      for (const listener of listenersRef.current) listener(m);
+    };
+
     (async () => {
       try {
         const landmarker = await loadFaceLandmarker();
         if (cancelled) return;
-        setState((s) => ({ ...s, ready: true }));
+        publishDiscreteIfChanged({ ...lastDiscrete, ready: true });
 
         const tick = () => {
           if (cancelled) return;
@@ -187,19 +263,24 @@ export function useBlink({
               upStartRef.current = null;
               lookUpFiredRef.current = false;
               rightStartRef.current = null;
-              setState((s) => ({
-                ...s,
+              lookRightFiredRef.current = false;
+
+              const m = metricsRef.current;
+              m.closedness = 0;
+              m.closedForMs = 0;
+              m.upness = 0;
+              m.upForMs = 0;
+              m.rightness = 0;
+              m.rightForMs = 0;
+              notifyMetrics();
+
+              publishDiscreteIfChanged({
+                ...lastDiscrete,
                 faceDetected: false,
-                closedness: 0,
                 isClosed: false,
-                closedForMs: 0,
-                upness: 0,
                 isLookingUp: false,
-                upForMs: 0,
-                rightness: 0,
                 isLookingRight: false,
-                rightForMs: 0,
-              }));
+              });
             } else {
               const closedness = (scores.blinkLeft + scores.blinkRight) / 2;
               const upness = (scores.lookUpLeft + scores.lookUpRight) / 2;
@@ -313,25 +394,29 @@ export function useBlink({
                 }
               }
 
-              setState({
+              // Mutate metrics in place — no React state, no re-render.
+              const m = metricsRef.current;
+              m.closedness = closedness;
+              m.closedForMs =
+                closedStartRef.current !== null
+                  ? now - closedStartRef.current
+                  : 0;
+              m.upness = upness;
+              m.upForMs =
+                upStartRef.current !== null ? now - upStartRef.current : 0;
+              m.rightness = rightness;
+              m.rightForMs =
+                rightStartRef.current !== null
+                  ? now - rightStartRef.current
+                  : 0;
+              notifyMetrics();
+
+              publishDiscreteIfChanged({
                 ready: true,
                 faceDetected: true,
-                closedness,
                 isClosed,
-                closedForMs:
-                  closedStartRef.current !== null
-                    ? now - closedStartRef.current
-                    : 0,
-                upness,
                 isLookingUp: upStartRef.current !== null,
-                upForMs:
-                  upStartRef.current !== null ? now - upStartRef.current : 0,
-                rightness,
                 isLookingRight: rightStartRef.current !== null,
-                rightForMs:
-                  rightStartRef.current !== null
-                    ? now - rightStartRef.current
-                    : 0,
                 error: null,
               });
             }
@@ -357,7 +442,7 @@ export function useBlink({
                 : typeof e === "string"
                   ? e
                   : JSON.stringify(e);
-          setState((s) => ({ ...s, error: msg }));
+          publishDiscreteIfChanged({ ...lastDiscrete, error: msg });
         }
       }
     })();
@@ -369,5 +454,14 @@ export function useBlink({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, videoRef]);
 
-  return state;
+  // Memoise the runtime object so consumers get a stable reference unless
+  // discrete state actually changed.
+  return useMemo<BlinkRuntime>(
+    () => ({
+      ...discrete,
+      metricsRef,
+      subscribeMetrics,
+    }),
+    [discrete, subscribeMetrics],
+  );
 }

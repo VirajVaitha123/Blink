@@ -1,12 +1,16 @@
 "use client";
 
+import { memo } from "react";
+
 import { Card, CardHeader } from "./Card";
 
 type Props = {
   text: string;
 };
 
-export function Transcript({ text }: Props) {
+export const Transcript = memo(TranscriptInner);
+
+function TranscriptInner({ text }: Props) {
   return (
     <Card className="p-5 sm:p-6">
       <CardHeader
