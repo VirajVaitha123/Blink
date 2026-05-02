@@ -1,16 +1,11 @@
 /**
  * Local LLM-backed word-completion predictor.
  *
- * Loads SmolLM2-360M-Instruct (q4f16 ONNX, ~310 MB) lazily via Transformers.js
+ * Loads SmolLM2-135M-Instruct (q4f16 ONNX, ~118 MB) lazily via Transformers.js
  * and exposes a `predict(text)` that returns the top-k word continuations
  * given the current transcript. Same model handles both modes naturally:
  *   - mid-word ("I want hel"  → ["hello", "help", "held"])
  *   - post-space ("I want " → ["to", "you", "a"])
- *
- * Bumped up from 135M after live testing: 135M missed common completions
- * ("HEL" → "HELT" rather than "HELLO") often enough to be frustrating.
- * 360M is ~4× the params and visibly stronger on common English while
- * still loading in well under a minute on home wifi.
  *
  * The pipeline is a singleton because the model weights are large and
  * we never want to re-download them within a session. After first load
@@ -19,7 +14,7 @@
  */
 import { pipeline } from "@huggingface/transformers";
 
-const MODEL_ID = "HuggingFaceTB/SmolLM2-360M-Instruct";
+const MODEL_ID = "HuggingFaceTB/SmolLM2-135M-Instruct";
 
 // Type the pipeline loosely — Transformers.js' generic types are awkward
 // across versions and `any` here is contained to this module's surface.
