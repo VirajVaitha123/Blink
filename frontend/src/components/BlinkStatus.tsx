@@ -72,7 +72,7 @@ function MeterBlock({
   thresholdMs: number;
   color: string;
 }) {
-  const ms = useBlinkMetric(blink, (m) => m[metricKey]);
+  const ms = useBlinkMetric(blink, metricKey);
   return (
     <MeterBar
       label={label}
@@ -92,7 +92,7 @@ function StatBlock({
   label: string;
   metricKey: "closedness" | "upness";
 }) {
-  const value = useBlinkMetric(blink, (m) => m[metricKey]);
+  const value = useBlinkMetric(blink, metricKey);
   return (
     <div className="rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2">
       <div className="text-[10px] uppercase tracking-wider text-white/45">
