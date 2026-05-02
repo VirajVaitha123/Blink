@@ -24,12 +24,12 @@ const VOICE_CUES = ["Starting", "Opened menu", "Resumed", "Space"] as const;
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
-  // 1100ms — brisk default cycle. Previously bumped up to 1200ms because
-  // the old 200ms intent threshold made a missed selection on the 5-item
-  // last row painful; now that the threshold is 170ms the selection is
-  // crisp again and 1100ms reads as "fast but not rushed". Tunable live
-  // via the slider (500–3000ms).
-  const [scanMs, setScanMs] = useState(1100);
+  // 1050ms — settled here after testing. The earlier 1100→1200 bump-up
+  // was driven by the old 200ms intent threshold making missed selections
+  // on the 5-item last row painful; with the threshold now at 170ms the
+  // selection is crisp enough that we can run a touch faster than the
+  // previous 1100ms. Tunable live via the slider (500–3000ms).
+  const [scanMs, setScanMs] = useState(1050);
 
   const { state, dispatch } = useScanner({
     scanMs,
