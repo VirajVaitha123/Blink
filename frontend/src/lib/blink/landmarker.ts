@@ -34,6 +34,14 @@ export type FaceScores = {
   lookUpLeft: number;
   /** eyeLookUpRight blendshape (0..1). */
   lookUpRight: number;
+  /** eyeLookInLeft blendshape — left eye rotated toward nose. */
+  lookInLeft: number;
+  /** eyeLookInRight blendshape — right eye rotated toward nose. */
+  lookInRight: number;
+  /** eyeLookOutLeft blendshape — left eye rotated away from nose. */
+  lookOutLeft: number;
+  /** eyeLookOutRight blendshape — right eye rotated away from nose. */
+  lookOutRight: number;
 };
 
 let landmarkerSingleton: FaceLandmarker | null = null;
@@ -66,6 +74,10 @@ export function extractFaceScores(
     blinkRight: 0,
     lookUpLeft: 0,
     lookUpRight: 0,
+    lookInLeft: 0,
+    lookInRight: 0,
+    lookOutLeft: 0,
+    lookOutRight: 0,
   };
   for (const cat of blendshapes) {
     switch (cat.categoryName) {
@@ -80,6 +92,18 @@ export function extractFaceScores(
         break;
       case "eyeLookUpRight":
         out.lookUpRight = cat.score;
+        break;
+      case "eyeLookInLeft":
+        out.lookInLeft = cat.score;
+        break;
+      case "eyeLookInRight":
+        out.lookInRight = cat.score;
+        break;
+      case "eyeLookOutLeft":
+        out.lookOutLeft = cat.score;
+        break;
+      case "eyeLookOutRight":
+        out.lookOutRight = cat.score;
         break;
     }
   }

@@ -18,7 +18,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { extractFaceScores, loadFaceLandmarker } from "./landmarker";
 
-export type BlinkKind = "intent" | "long" | "lookUp";
+export type BlinkKind = "intent" | "long" | "lookUp" | "lookRight";
 
 export type BlinkEvent = {
   kind: BlinkKind;
@@ -41,6 +41,16 @@ export type BlinkConfig = {
   lookUpLow: number;
   /** Min sustained duration to count as a deliberate look-up. */
   lookUpMinMs: number;
+  /** Score threshold above which the user is considered to be looking right. */
+  lookRightHigh: number;
+  /** Score threshold below which the look-right gesture is considered released. */
+  lookRightLow: number;
+  /**
+   * Min sustained duration before a look-right release counts as intent.
+   * Releases shorter than this are dropped entirely (the "intent zone" —
+   * lets a stray glance off-screen go unpunished).
+   */
+  lookRightIntentMs: number;
 };
 
 export const DEFAULT_BLINK_CONFIG: BlinkConfig = {
@@ -65,6 +75,13 @@ export const DEFAULT_BLINK_CONFIG: BlinkConfig = {
   lookUpHigh: 0.4,
   lookUpLow: 0.2,
   lookUpMinMs: 500,
+  // Look-right uses the same hysteresis pair as look-up — the underlying
+  // blendshapes have similar dynamic range. lookRightIntentMs is the floor
+  // below which a release is ignored; the actual chip selection in the UI
+  // comes from how long the gaze is *held*, not when it crossed the line.
+  lookRightHigh: 0.4,
+  lookRightLow: 0.2,
+  lookRightIntentMs: 300,
 };
 
 export type BlinkRuntimeState = {
@@ -76,6 +93,11 @@ export type BlinkRuntimeState = {
   upness: number;
   isLookingUp: boolean;
   upForMs: number;
+  /** Average of eyeLookOutRight + eyeLookInLeft (looking right from user's POV). */
+  rightness: number;
+  isLookingRight: boolean;
+  /** Live duration the user has been holding gaze right; drives chip cycling. */
+  rightForMs: number;
   error: string | null;
 };
 
@@ -103,6 +125,9 @@ export function useBlink({
     upness: 0,
     isLookingUp: false,
     upForMs: 0,
+    rightness: 0,
+    isLookingRight: false,
+    rightForMs: 0,
     error: null,
   });
 
@@ -121,6 +146,11 @@ export function useBlink({
   // Look-up-episode tracking
   const upStartRef = useRef<number | null>(null);
   const lookUpFiredRef = useRef(false);
+
+  // Look-right-episode tracking. Unlike look-up we fire on *release*
+  // (carrying the held duration) so the page can use the duration to
+  // pick which suggestion chip was active when the user let go.
+  const rightStartRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!enabled) return;
@@ -152,6 +182,7 @@ export function useBlink({
               longFiredRef.current = false;
               upStartRef.current = null;
               lookUpFiredRef.current = false;
+              rightStartRef.current = null;
               setState((s) => ({
                 ...s,
                 faceDetected: false,
@@ -161,10 +192,18 @@ export function useBlink({
                 upness: 0,
                 isLookingUp: false,
                 upForMs: 0,
+                rightness: 0,
+                isLookingRight: false,
+                rightForMs: 0,
               }));
             } else {
               const closedness = (scores.blinkLeft + scores.blinkRight) / 2;
               const upness = (scores.lookUpLeft + scores.lookUpRight) / 2;
+              // Looking right (from the user's POV): right eye rotates
+              // outward, left eye rotates inward. Average gives a clean
+              // signal that's robust to per-eye blendshape noise.
+              const rightness =
+                (scores.lookOutRight + scores.lookInLeft) / 2;
 
               // Blink state
               const wasClosed = closedStartRef.current !== null;
@@ -204,13 +243,14 @@ export function useBlink({
                 });
               }
 
-              // Look-up state.
+              // Look-up and look-right state.
               // Suppress while eyes are closed: gaze blendshapes aren't
               // meaningful during a blink, and we don't want "blink and roll
               // eyes up" to count as a deliberate gesture.
               if (isClosed) {
                 upStartRef.current = null;
                 lookUpFiredRef.current = false;
+                rightStartRef.current = null;
               } else {
                 const wasUp = upStartRef.current !== null;
                 const isUp = wasUp
@@ -237,6 +277,29 @@ export function useBlink({
                     at: now,
                   });
                 }
+
+                // Look-right: same hysteresis, but we fire on *release* and
+                // carry the held duration so the page can pick which chip
+                // was active when the user let go. Drop releases shorter
+                // than `lookRightIntentMs` (treats a stray glance as noise).
+                const wasRight = rightStartRef.current !== null;
+                const isRight = wasRight
+                  ? rightness > cfg.lookRightLow
+                  : rightness > cfg.lookRightHigh;
+
+                if (isRight && !wasRight) {
+                  rightStartRef.current = now;
+                } else if (!isRight && wasRight) {
+                  const duration = now - (rightStartRef.current ?? now);
+                  rightStartRef.current = null;
+                  if (duration >= cfg.lookRightIntentMs) {
+                    onEventRef.current?.({
+                      kind: "lookRight",
+                      durationMs: duration,
+                      at: now,
+                    });
+                  }
+                }
               }
 
               setState({
@@ -252,6 +315,12 @@ export function useBlink({
                 isLookingUp: upStartRef.current !== null,
                 upForMs:
                   upStartRef.current !== null ? now - upStartRef.current : 0,
+                rightness,
+                isLookingRight: rightStartRef.current !== null,
+                rightForMs:
+                  rightStartRef.current !== null
+                    ? now - rightStartRef.current
+                    : 0,
                 error: null,
               });
             }
