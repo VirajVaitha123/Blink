@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { BlinkStatus } from "@/components/BlinkStatus";
 import { CameraView } from "@/components/CameraView";
@@ -8,18 +8,29 @@ import { CommandBar } from "@/components/CommandBar";
 import { GestureLegend } from "@/components/GestureLegend";
 import { ScanGrid } from "@/components/ScanGrid";
 import { ScanSpeedControl } from "@/components/ScanSpeedControl";
+import {
+  computeActiveChip,
+  SuggestionStrip,
+} from "@/components/SuggestionStrip";
 import { Transcript } from "@/components/Transcript";
 import {
   DEFAULT_BLINK_CONFIG,
   useBlink,
   type BlinkEvent,
 } from "@/lib/blink/useBlink";
+import { usePredictor } from "@/lib/predict/usePredictor";
 import { DEFAULT_COMMANDS, DEFAULT_GROUPS } from "@/lib/scanner/layouts";
 import { useScanner } from "@/lib/scanner/useScanner";
 import { useVoiceCues } from "@/lib/voice/useVoiceCues";
 
 // Stable identity so useVoiceCues' prewarm effect doesn't re-run each render.
-const VOICE_CUES = ["Starting", "Opened menu", "Resumed", "Space"] as const;
+const VOICE_CUES = [
+  "Starting",
+  "Opened menu",
+  "Resumed",
+  "Space",
+  "Accepted",
+] as const;
 
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -37,6 +48,10 @@ export default function Home() {
   });
 
   const speak = useVoiceCues(VOICE_CUES);
+
+  // Local-LLM predictor. Runs entirely in the browser; first visit pays
+  // a one-time ~118 MB download, then it's cached in IndexedDB.
+  const predictor = usePredictor(state.text, /* enabled */ true);
 
   const handleBlinkEvent = useCallback(
     (event: BlinkEvent) => {
@@ -72,9 +87,26 @@ export default function Home() {
       if (event.kind === "lookUp") {
         dispatch({ type: "insertChar", char: " " });
         void speak("Space");
+        return;
+      }
+      if (event.kind === "lookRight") {
+        // The held duration carried in the event tells us which chip was
+        // active at release. Replace the partial word at the end of the
+        // transcript with the full suggested word + a trailing space.
+        const { index } = computeActiveChip(
+          event.durationMs,
+          predictor.suggestions.length,
+        );
+        if (index === null) return;
+        const word = predictor.suggestions[index];
+        if (!word) return;
+        const lastSpace = state.text.lastIndexOf(" ");
+        const base = state.text.slice(0, lastSpace + 1);
+        dispatch({ type: "setText", text: base + word + " " });
+        void speak("Accepted");
       }
     },
-    [dispatch, speak, state],
+    [dispatch, speak, state, predictor.suggestions],
   );
 
   const blink = useBlink({
@@ -82,6 +114,30 @@ export default function Home() {
     enabled: cameraReady,
     onEvent: handleBlinkEvent,
   });
+
+  // Speak each suggestion as the dwell-cycle activates it, so the user
+  // can hear which chip would be committed if they release now. Tracked
+  // with a ref so we don't re-speak when unrelated state churns.
+  const lastSpokenChipRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!blink.isLookingRight) {
+      lastSpokenChipRef.current = null;
+      return;
+    }
+    const { index } = computeActiveChip(
+      blink.rightForMs,
+      predictor.suggestions.length,
+    );
+    if (index === null) {
+      lastSpokenChipRef.current = null;
+      return;
+    }
+    if (lastSpokenChipRef.current !== index) {
+      lastSpokenChipRef.current = index;
+      const word = predictor.suggestions[index];
+      if (word) void speak(word);
+    }
+  }, [blink.isLookingRight, blink.rightForMs, predictor.suggestions, speak]);
 
   return (
     <main className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-10 lg:py-12">
@@ -106,6 +162,13 @@ export default function Home() {
 
         <section className="space-y-4">
           <Transcript text={state.text} />
+          <SuggestionStrip
+            suggestions={predictor.suggestions}
+            rightForMs={blink.rightForMs}
+            isLookingRight={blink.isLookingRight}
+            loading={!predictor.ready}
+            loadProgress={predictor.progress?.fraction ?? 0}
+          />
           <CommandBar commands={DEFAULT_COMMANDS} state={state} />
           <ScanGrid groups={DEFAULT_GROUPS} state={state} />
           <ControlBar state={state} dispatch={dispatch} />

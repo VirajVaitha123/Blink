@@ -41,7 +41,8 @@ export type ScannerAction =
   | { type: "clear" }
   | { type: "enterCommands" }
   | { type: "exitCommands" }
-  | { type: "insertChar"; char: string };
+  | { type: "insertChar"; char: string }
+  | { type: "setText"; text: string };
 
 export type ScannerConfig = {
   groups: readonly Group[];
@@ -87,6 +88,12 @@ export function reduce(
       // look-up gesture for space, but generic so any external trigger
       // can insert text.
       return { ...state, text: state.text + action.char };
+
+    case "setText":
+      // Wholesale replace the transcript without changing scanner phase.
+      // Used by the autocomplete accept gesture, where the suggested word
+      // replaces the partial word at the end of the transcript.
+      return { ...state, text: action.text };
 
     case "tick": {
       if (state.phase === "groupScan") {
