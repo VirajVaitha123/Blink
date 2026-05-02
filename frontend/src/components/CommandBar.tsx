@@ -1,5 +1,7 @@
 "use client";
 
+import { memo } from "react";
+
 import { type Command, type CommandEffect } from "@/lib/scanner/layouts";
 import type { ScannerState } from "@/lib/scanner/machine";
 
@@ -25,7 +27,9 @@ const COMMAND_COLORS: Record<CommandEffect, string> = {
  * Command menu — entered via long blink while scanning. Always rendered so
  * the gesture is discoverable, but visually muted when not the active phase.
  */
-export function CommandBar({ commands, state }: Props) {
+export const CommandBar = memo(CommandBarInner);
+
+function CommandBarInner({ commands, state }: Props) {
   const active = state.phase === "commandScan";
   return (
     <Card
