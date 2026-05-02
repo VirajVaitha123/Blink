@@ -46,14 +46,15 @@ export type BlinkConfig = {
 export const DEFAULT_BLINK_CONFIG: BlinkConfig = {
   closedThreshold: 0.5,
   openThreshold: 0.35,
-  // 150ms is just above the natural involuntary-blink range (~100-130ms)
-  // so reflex blinks rarely fire selections, but a deliberate quick blink
-  // still registers — important for users (or rows like Y/Z/⌫/☰) where
-  // pacing matters and a 200ms hold felt sluggish in testing.
-  intentMinMs: 150,
+  // 160ms — small step down from 170ms after the user found 170ms felt
+  // slightly effortful. Still above the involuntary-blink range
+  // (~100-130ms) so reflex blinks don't fire selections, but a relaxed
+  // deliberate blink registers without needing to be exaggerated. 150ms
+  // was too low (faint blinks slipped through), 170ms was too high.
+  intentMinMs: 160,
   // 1500ms felt the right point in testing — comfortably above the
-  // intent threshold (200ms) so accidental fires are unlikely, but short
-  // enough that opening the command menu mid-scan doesn't feel laborious.
+  // intent threshold so accidental fires are unlikely, but short enough
+  // that opening the command menu mid-scan doesn't feel laborious.
   longMinMs: 1500,
   // Look-up: MediaPipe's eyeLookUp blendshapes measure iris rotation
   // relative to the head, not absolute gaze. Pure eye-look-up at a screen

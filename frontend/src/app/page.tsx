@@ -24,11 +24,11 @@ const VOICE_CUES = ["Starting", "Opened menu", "Resumed", "Space"] as const;
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
-  // 1200ms gives a slightly more comfortable rhythm than the prior 1100ms,
-  // particularly on the longer last row (5 items: Y/Z/␣/⌫/☰). Still well
-  // under the original 1500ms default and tunable live via the slider
-  // (500–3000ms).
-  const [scanMs, setScanMs] = useState(1200);
+  // 1050ms — settled here after iterating: 1000ms was a touch too brisk,
+  // 1100ms felt slightly slow. The slider step is 50ms so this sits on a
+  // snap point, and the label formatter shows the extra precision as
+  // "1.05s". Tunable live via the slider (500–3000ms).
+  const [scanMs, setScanMs] = useState(1050);
 
   const { state, dispatch } = useScanner({
     scanMs,
@@ -55,14 +55,16 @@ export default function Home() {
       }
       if (event.kind === "intent") {
         if (state.phase === "idle") return;
-        // Selecting "Resume" from the command menu also returns to
-        // scanning — speak the same cue so the audio is consistent
-        // regardless of whether the user long-blinked or selected it.
-        if (
-          state.phase === "commandScan" &&
-          DEFAULT_COMMANDS[state.cursor]?.id === "resume"
-        ) {
-          void speak("Resumed");
+        if (state.phase === "commandScan") {
+          const cmd = DEFAULT_COMMANDS[state.cursor];
+          // Selecting "Resume" from the command menu also returns to
+          // scanning — speak the same cue so the audio is consistent
+          // regardless of whether the user long-blinked or selected it.
+          if (cmd?.id === "resume") {
+            void speak("Resumed");
+          } else if (cmd?.id === "play" && state.text.trim().length > 0) {
+            void speak(state.text);
+          }
         }
         dispatch({ type: "select" });
         return;

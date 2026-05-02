@@ -159,5 +159,12 @@ function runCommand(
       };
     case "clear":
       return { phase: "idle", text: "" };
+    case "play":
+      // TTS playback is a side effect handled by the page-level event
+      // handler (see handleBlinkEvent). The reducer just keeps the user
+      // in the menu with the cursor reset to Resume, mirroring backspace:
+      // a quick blink then exits cleanly, or they can wait for Play to
+      // come back around to repeat.
+      return { phase: "commandScan", text: state.text, cursor: 0 };
   }
 }
