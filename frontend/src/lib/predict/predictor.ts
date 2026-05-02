@@ -105,9 +105,17 @@ export async function predict(
   const maxNewTokens = options.maxNewTokens ?? 4;
   if (text.length === 0) return [];
 
+  // The keyboard is all-caps so the transcript is e.g. "HEL", but the
+  // language model was trained on natural text where uppercase mid-word
+  // is vanishingly rare (acronyms, proper nouns). Feeding "HEL" gets us
+  // weird Norse-mythology / Helsinki continuations; feeding "hel" gets
+  // us "hello". We lowercase for inference, then re-upper the result so
+  // it matches the transcript's style when inserted.
+  const lowered = text.toLowerCase();
+
   const generator = await loadPredictor();
   const beams = Math.max(k * 2, 5);
-  const raw = (await generator(text, {
+  const raw = (await generator(lowered, {
     max_new_tokens: maxNewTokens,
     num_beams: beams,
     num_return_sequences: beams,
@@ -116,28 +124,27 @@ export async function predict(
     return_full_text: true,
   })) as Array<{ generated_text: string }>;
 
-  const lastSpace = text.lastIndexOf(" ");
-  const partialWord = text.slice(lastSpace + 1).toLowerCase();
+  const lastSpace = lowered.lastIndexOf(" ");
+  const partialWord = lowered.slice(lastSpace + 1);
   const seen = new Set<string>();
   const out: string[] = [];
 
   for (const item of raw) {
     // From the same character offset onward in the generated text, read
     // forward to the next non-letter character. This reconstructs the
-    // *completed* word — important for mid-word completion where the model
-    // only adds a suffix to the user's prefix.
+    // *completed* word — important for mid-word completion where the
+    // model only adds a suffix to the user's prefix.
     const after = item.generated_text.slice(lastSpace + 1).trimStart();
     const match = after.match(/^([A-Za-z']+)/);
     if (!match) continue;
-    const word = match[1];
-    const lower = word.toLowerCase();
+    const lower = match[1].toLowerCase();
     // Filter: must extend the partial (if any), must not just echo it,
     // must be unique in the result set.
     if (partialWord && !lower.startsWith(partialWord)) continue;
     if (lower === partialWord) continue;
     if (seen.has(lower)) continue;
     seen.add(lower);
-    out.push(word);
+    out.push(lower.toUpperCase());
     if (out.length >= k) break;
   }
 
