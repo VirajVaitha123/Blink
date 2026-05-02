@@ -9,7 +9,28 @@ import type { NextConfig } from "next";
 // vars like ELEVENLABS_API_KEY are available in route handlers.
 loadRootEnv();
 
-const nextConfig: NextConfig = {};
+// Transformers.js pulls in `sharp` and `onnxruntime-node` for its
+// server-side path. We only ever run it in the browser, so alias both
+// to false in client bundles to avoid noisy "module not found" errors
+// during build. (https://huggingface.co/docs/transformers.js/tutorials/next)
+const nextConfig: NextConfig = {
+  webpack: (config) => {
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      sharp$: false,
+      "onnxruntime-node$": false,
+    };
+    return config;
+  },
+  turbopack: {
+    resolveAlias: {
+      sharp: { browser: "data:text/javascript,export default null;" },
+      "onnxruntime-node": {
+        browser: "data:text/javascript,export default null;",
+      },
+    },
+  },
+};
 
 export default nextConfig;
 
