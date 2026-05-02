@@ -88,12 +88,13 @@ export function usePredictor(
     };
   }, []);
 
+  // `ready` is intentional in the dep list even though predictor.suggest
+  // doesn't reference it — it forces the memo to recompute the moment
+  // the wordlist finishes loading so prefix completions appear without
+  // needing another keystroke. The lint rule can't see this.
   const suggestions = useMemo<readonly string[]>(
     () => predictorInstance.suggest(text, topK),
-    // `ready` is intentional in the dep list — it forces a re-suggest
-    // when the trie gets populated so prefix completions appear without
-    // needing another keystroke.
-    [text, topK, ready],
+    [text, topK, ready], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   // Always-fresh text ref so commit() can read the transcript at the

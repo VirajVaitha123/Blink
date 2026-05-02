@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import { BlinkStatus } from "@/components/BlinkStatus";
 import { CameraView } from "@/components/CameraView";
@@ -130,21 +130,6 @@ export default function Home() {
     enabled: cameraReady,
     onEvent: handleBlinkEvent,
   });
-
-  // Speak each suggestion as the suggestionScan cursor lands on it, so
-  // the user hears which chip would commit on a blink. A ref guards
-  // against re-speaking when unrelated state churns within the same tick.
-  const lastSpokenChipRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (state.phase !== "suggestionScan") {
-      lastSpokenChipRef.current = null;
-      return;
-    }
-    if (lastSpokenChipRef.current === state.cursor) return;
-    lastSpokenChipRef.current = state.cursor;
-    const word = state.suggestions[state.cursor];
-    if (word) void speak(word);
-  }, [state, speak]);
 
   return (
     <main className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-10 lg:py-12">
