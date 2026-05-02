@@ -1,13 +1,17 @@
 /**
  * React hook that turns a raw <video> element into a stream of intentional
- * face-driven events. Three event kinds:
+ * face-driven events. Four event kinds:
  *
- *   - "intent"  — short blink (>=intentMinMs, <longMinMs); used to lock a
- *                 selection in the scanner
- *   - "long"    — long blink (>=longMinMs); used to start scanning, open
- *                 the command menu, or cancel out of it
- *   - "lookUp"  — sustained upward gaze (>=lookUpMinMs); used to insert a
- *                 space without going through the scanner
+ *   - "intent"    — short blink (>=intentMinMs, <longMinMs); locks a
+ *                   selection in the scanner
+ *   - "long"      — long blink (>=longMinMs); start scanning, open the
+ *                   command menu, or cancel out of it
+ *   - "lookUp"    — sustained upward gaze (>=lookUpMinMs); inserts a space
+ *                   without going through the scanner
+ *   - "lookRight" — sustained right gaze (>=lookRightHoldMs); fires once
+ *                   per episode when the dwell threshold is crossed (the
+ *                   suggestion-card "fill" completes), opening the
+ *                   suggestion picker
  *
  * Each gesture has hysteresis (separate enter/exit thresholds) to keep
  * detection stable as scores wobble around the threshold.
@@ -18,7 +22,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { extractFaceScores, loadFaceLandmarker } from "./landmarker";
 
-export type BlinkKind = "intent" | "long" | "lookUp";
+export type BlinkKind = "intent" | "long" | "lookUp" | "lookRight";
 
 export type BlinkEvent = {
   kind: BlinkKind;
@@ -41,6 +45,16 @@ export type BlinkConfig = {
   lookUpLow: number;
   /** Min sustained duration to count as a deliberate look-up. */
   lookUpMinMs: number;
+  /** Score threshold above which the user is considered to be looking right. */
+  lookRightHigh: number;
+  /** Score threshold below which the look-right gesture is considered released. */
+  lookRightLow: number;
+  /**
+   * Sustained-gaze duration after which the look-right gesture fires. The
+   * UI fills the suggestion card during this window so the user has a
+   * reversible affordance — release before this and nothing happens.
+   */
+  lookRightHoldMs: number;
 };
 
 export const DEFAULT_BLINK_CONFIG: BlinkConfig = {
@@ -65,6 +79,13 @@ export const DEFAULT_BLINK_CONFIG: BlinkConfig = {
   lookUpHigh: 0.4,
   lookUpLow: 0.2,
   lookUpMinMs: 500,
+  // Look-right uses the same hysteresis pair as look-up — the underlying
+  // blendshapes have similar dynamic range. 1000ms hold matches the user's
+  // expectation that a short glance off-screen is forgiven and only a
+  // deliberate 1s gaze opens the suggestion picker.
+  lookRightHigh: 0.4,
+  lookRightLow: 0.2,
+  lookRightHoldMs: 1000,
 };
 
 export type BlinkRuntimeState = {
@@ -76,6 +97,11 @@ export type BlinkRuntimeState = {
   upness: number;
   isLookingUp: boolean;
   upForMs: number;
+  /** Average of eyeLookOutRight + eyeLookInLeft (looking right from user POV). */
+  rightness: number;
+  isLookingRight: boolean;
+  /** Live duration the user has been holding gaze right; drives chip cycling. */
+  rightForMs: number;
   error: string | null;
 };
 
@@ -103,6 +129,9 @@ export function useBlink({
     upness: 0,
     isLookingUp: false,
     upForMs: 0,
+    rightness: 0,
+    isLookingRight: false,
+    rightForMs: 0,
     error: null,
   });
 
@@ -121,6 +150,11 @@ export function useBlink({
   // Look-up-episode tracking
   const upStartRef = useRef<number | null>(null);
   const lookUpFiredRef = useRef(false);
+
+  // Look-right-episode tracking. Same fire-on-cross-threshold model as
+  // look-up: one event per sustained-gaze episode, latched until release.
+  const rightStartRef = useRef<number | null>(null);
+  const lookRightFiredRef = useRef(false);
 
   useEffect(() => {
     if (!enabled) return;
@@ -152,6 +186,7 @@ export function useBlink({
               longFiredRef.current = false;
               upStartRef.current = null;
               lookUpFiredRef.current = false;
+              rightStartRef.current = null;
               setState((s) => ({
                 ...s,
                 faceDetected: false,
@@ -161,10 +196,18 @@ export function useBlink({
                 upness: 0,
                 isLookingUp: false,
                 upForMs: 0,
+                rightness: 0,
+                isLookingRight: false,
+                rightForMs: 0,
               }));
             } else {
               const closedness = (scores.blinkLeft + scores.blinkRight) / 2;
               const upness = (scores.lookUpLeft + scores.lookUpRight) / 2;
+              // Looking right (from the user's POV): right eye rotates
+              // outward, left eye rotates inward. Averaging gives a clean
+              // signal robust to per-eye blendshape noise.
+              const rightness =
+                (scores.lookOutRight + scores.lookInLeft) / 2;
 
               // Blink state
               const wasClosed = closedStartRef.current !== null;
@@ -204,13 +247,15 @@ export function useBlink({
                 });
               }
 
-              // Look-up state.
+              // Look-up and look-right state.
               // Suppress while eyes are closed: gaze blendshapes aren't
               // meaningful during a blink, and we don't want "blink and roll
               // eyes up" to count as a deliberate gesture.
               if (isClosed) {
                 upStartRef.current = null;
                 lookUpFiredRef.current = false;
+                rightStartRef.current = null;
+                lookRightFiredRef.current = false;
               } else {
                 const wasUp = upStartRef.current !== null;
                 const isUp = wasUp
@@ -237,6 +282,35 @@ export function useBlink({
                     at: now,
                   });
                 }
+
+                // Look-right: same fill-then-fire model as look-up. The UI
+                // shows a single fill bar across the suggestion card while
+                // rightForMs grows toward lookRightHoldMs; crossing the
+                // threshold fires once and opens the picker.
+                const wasRight = rightStartRef.current !== null;
+                const isRight = wasRight
+                  ? rightness > cfg.lookRightLow
+                  : rightness > cfg.lookRightHigh;
+
+                if (isRight && !wasRight) {
+                  rightStartRef.current = now;
+                  lookRightFiredRef.current = false;
+                } else if (!isRight && wasRight) {
+                  rightStartRef.current = null;
+                  lookRightFiredRef.current = false;
+                } else if (
+                  isRight &&
+                  wasRight &&
+                  !lookRightFiredRef.current &&
+                  now - (rightStartRef.current ?? now) >= cfg.lookRightHoldMs
+                ) {
+                  lookRightFiredRef.current = true;
+                  onEventRef.current?.({
+                    kind: "lookRight",
+                    durationMs: now - (rightStartRef.current ?? now),
+                    at: now,
+                  });
+                }
               }
 
               setState({
@@ -252,6 +326,12 @@ export function useBlink({
                 isLookingUp: upStartRef.current !== null,
                 upForMs:
                   upStartRef.current !== null ? now - upStartRef.current : 0,
+                rightness,
+                isLookingRight: rightStartRef.current !== null,
+                rightForMs:
+                  rightStartRef.current !== null
+                    ? now - rightStartRef.current
+                    : 0,
                 error: null,
               });
             }

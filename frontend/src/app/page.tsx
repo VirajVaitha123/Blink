@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { BlinkStatus } from "@/components/BlinkStatus";
 import { CameraView } from "@/components/CameraView";
@@ -8,18 +8,27 @@ import { CommandBar } from "@/components/CommandBar";
 import { GestureLegend } from "@/components/GestureLegend";
 import { ScanGrid } from "@/components/ScanGrid";
 import { ScanSpeedControl } from "@/components/ScanSpeedControl";
+import { SuggestionStrip } from "@/components/SuggestionStrip";
 import { Transcript } from "@/components/Transcript";
 import {
   DEFAULT_BLINK_CONFIG,
   useBlink,
   type BlinkEvent,
 } from "@/lib/blink/useBlink";
+import { usePredictor } from "@/lib/predict/usePredictor";
 import { DEFAULT_COMMANDS, DEFAULT_GROUPS } from "@/lib/scanner/layouts";
 import { useScanner } from "@/lib/scanner/useScanner";
 import { useVoiceCues } from "@/lib/voice/useVoiceCues";
 
 // Stable identity so useVoiceCues' prewarm effect doesn't re-run each render.
-const VOICE_CUES = ["Starting", "Opened menu", "Resumed", "Space"] as const;
+const VOICE_CUES = [
+  "Starting",
+  "Opened menu",
+  "Resumed",
+  "Space",
+  "Suggestions",
+  "Cancelled",
+] as const;
 
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -38,6 +47,11 @@ export default function Home() {
 
   const speak = useVoiceCues(VOICE_CUES);
 
+  // Trie-based word predictor. Pure data-structure work — wordlist.json
+  // (~280KB, top-10k common English words from Norvig n-grams) loads once
+  // on mount, then every keystroke scores in microseconds.
+  const predictor = usePredictor(state.text);
+
   const handleBlinkEvent = useCallback(
     (event: BlinkEvent) => {
       if (event.kind === "long") {
@@ -47,6 +61,11 @@ export default function Home() {
         } else if (state.phase === "commandScan") {
           dispatch({ type: "exitCommands" });
           void speak("Resumed");
+        } else if (state.phase === "suggestionScan") {
+          // Long blink while in the suggestion picker drops back to
+          // scanning, mirroring how it cancels the command menu.
+          dispatch({ type: "exitSuggestions" });
+          void speak("Cancelled");
         } else {
           dispatch({ type: "enterCommands" });
           void speak("Opened menu");
@@ -65,6 +84,13 @@ export default function Home() {
           } else if (cmd?.id === "play" && state.text.trim().length > 0) {
             void speak(state.text);
           }
+        } else if (state.phase === "suggestionScan") {
+          // Record the picked word in the predictor's personal/bigram
+          // memory before the reducer swaps the partial for the full
+          // word. parseContext on the *current* text gives us the right
+          // prev word for the bigram update.
+          const word = state.suggestions[state.cursor];
+          if (word) predictor.commit(word);
         }
         dispatch({ type: "select" });
         return;
@@ -72,9 +98,31 @@ export default function Home() {
       if (event.kind === "lookUp") {
         dispatch({ type: "insertChar", char: " " });
         void speak("Space");
+        return;
+      }
+      if (event.kind === "lookRight") {
+        // Open the picker from any phase that's safe to interrupt: idle,
+        // groupScan, letterScan. Idle is included so a user can begin a
+        // sentence directly with a SENTENCE_STARTERS pick (or a bigram
+        // continuation right after a Clear) without having to long-blink
+        // Start first. commandScan is excluded — a destructive command
+        // shouldn't be sidestepped — and suggestionScan is excluded
+        // because we're already in it.
+        if (
+          state.phase === "commandScan" ||
+          state.phase === "suggestionScan" ||
+          predictor.suggestions.length === 0
+        ) {
+          return;
+        }
+        dispatch({
+          type: "enterSuggestions",
+          suggestions: predictor.suggestions,
+        });
+        void speak("Suggestions");
       }
     },
-    [dispatch, speak, state],
+    [dispatch, speak, state, predictor],
   );
 
   const blink = useBlink({
@@ -82,6 +130,21 @@ export default function Home() {
     enabled: cameraReady,
     onEvent: handleBlinkEvent,
   });
+
+  // Speak each suggestion as the suggestionScan cursor lands on it, so
+  // the user hears which chip would commit on a blink. A ref guards
+  // against re-speaking when unrelated state churns within the same tick.
+  const lastSpokenChipRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (state.phase !== "suggestionScan") {
+      lastSpokenChipRef.current = null;
+      return;
+    }
+    if (lastSpokenChipRef.current === state.cursor) return;
+    lastSpokenChipRef.current = state.cursor;
+    const word = state.suggestions[state.cursor];
+    if (word) void speak(word);
+  }, [state, speak]);
 
   return (
     <main className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-10 lg:py-12">
@@ -106,6 +169,20 @@ export default function Home() {
 
         <section className="space-y-4">
           <Transcript text={state.text} />
+          <SuggestionStrip
+            suggestions={
+              state.phase === "suggestionScan"
+                ? state.suggestions
+                : predictor.suggestions
+            }
+            rightForMs={blink.rightForMs}
+            isLookingRight={blink.isLookingRight}
+            holdMs={DEFAULT_BLINK_CONFIG.lookRightHoldMs}
+            activeIndex={
+              state.phase === "suggestionScan" ? state.cursor : null
+            }
+            loading={!predictor.ready}
+          />
           <CommandBar commands={DEFAULT_COMMANDS} state={state} />
           <ScanGrid groups={DEFAULT_GROUPS} state={state} />
           <ControlBar state={state} dispatch={dispatch} />
@@ -123,7 +200,9 @@ function PageHeader({ phase }: { phase: ReturnType<typeof useScanner>["state"]["
         ? "Scanning groups — blink to lock, hold or pick ☰ for menu"
         : phase === "letterScan"
           ? "Scanning letters — blink to commit, hold or pick ☰ for menu"
-          : "Command menu — blink to run, hold to cancel";
+          : phase === "commandScan"
+            ? "Command menu — blink to run, hold to cancel"
+            : "Suggestion picker — blink to commit, hold to cancel";
 
   return (
     <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
