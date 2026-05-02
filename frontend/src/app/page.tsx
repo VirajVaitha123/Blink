@@ -24,13 +24,11 @@ const VOICE_CUES = ["Starting", "Opened menu", "Resumed", "Space"] as const;
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
-  // 1000ms — fast default that lands on a clean 1.0s in the UI label and
-  // on the slider's 100ms snap grid. The earlier 1100→1200 bump-up was
-  // driven by the old 200ms intent threshold making missed selections on
-  // the 5-item last row painful; with the threshold now at 170ms the
-  // selection is crisp enough to hold up at 1s. Tunable live via the
-  // slider (500–3000ms).
-  const [scanMs, setScanMs] = useState(1000);
+  // 1050ms — settled here after iterating: 1000ms was a touch too brisk,
+  // 1100ms felt slightly slow. The slider step is 50ms so this sits on a
+  // snap point, and the label formatter shows the extra precision as
+  // "1.05s". Tunable live via the slider (500–3000ms).
+  const [scanMs, setScanMs] = useState(1050);
 
   const { state, dispatch } = useScanner({
     scanMs,
