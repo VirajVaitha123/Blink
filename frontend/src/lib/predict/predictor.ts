@@ -1,152 +1,144 @@
 /**
- * Local LLM-backed word-completion predictor.
+ * Main-thread façade over the Web Worker that hosts the language model.
  *
- * Loads SmolLM2-135M-Instruct (q4f16 ONNX, ~118 MB) lazily via Transformers.js
- * and exposes a `predict(text)` that returns the top-k word continuations
- * given the current transcript. Same model handles both modes naturally:
- *   - mid-word ("I want hel"  → ["hello", "help", "held"])
- *   - post-space ("I want " → ["to", "you", "a"])
+ * Public API (loadPredictor / predict) is unchanged from before so the
+ * usePredictor hook didn't have to change — only the implementation
+ * moved off-thread.
  *
- * The pipeline is a singleton because the model weights are large and
- * we never want to re-download them within a session. After first load
- * Transformers.js caches the ONNX files in IndexedDB so subsequent visits
- * skip the network entirely.
+ * The worker is created lazily on first use; subsequent calls share it
+ * (and therefore share the loaded model). Predictions are correlated
+ * by an incrementing id so multiple in-flight requests don't get tangled.
  */
-import { pipeline } from "@huggingface/transformers";
-
-const MODEL_ID = "HuggingFaceTB/SmolLM2-135M-Instruct";
-
-// Type the pipeline loosely — Transformers.js' generic types are awkward
-// across versions and `any` here is contained to this module's surface.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type GeneratorPipeline = any;
-
-let pipelineSingleton: GeneratorPipeline | null = null;
-let inFlight: Promise<GeneratorPipeline> | null = null;
 
 export type LoadProgress = {
-  /** "downloading" while ONNX shards stream in, "ready" once usable. */
   status: "downloading" | "ready" | "error";
-  /** 0..1 fraction of bytes loaded across the model's files. */
+  /** 0..1 fraction of bytes downloaded across the model's files. */
   fraction: number;
-  /** Human-readable hint (current file or error message). */
   message?: string;
 };
 
-/**
- * Load (or return) the singleton text-generation pipeline. Repeated calls
- * before the first load resolves all share the same in-flight promise so
- * we never download twice.
- */
-export async function loadPredictor(
-  onProgress?: (p: LoadProgress) => void,
-): Promise<GeneratorPipeline> {
-  if (pipelineSingleton) {
-    onProgress?.({ status: "ready", fraction: 1 });
-    return pipelineSingleton;
-  }
-  if (inFlight) return inFlight;
+type WorkerMessage =
+  | { type: "progress"; loaded: number; total: number; file?: string }
+  | { type: "ready" }
+  | { type: "loadError"; message: string }
+  | { type: "result"; id: number; words: string[] }
+  | { type: "predictError"; id: number; message: string };
 
-  inFlight = (async () => {
-    try {
-      const pipe = await pipeline("text-generation", MODEL_ID, {
-        dtype: "q4f16",
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        progress_callback: (info: any) => {
-          if (!onProgress) return;
-          if (info?.status === "progress") {
-            const total = info.total ?? 0;
-            const loaded = info.loaded ?? 0;
-            onProgress({
-              status: "downloading",
-              fraction: total > 0 ? loaded / total : 0,
-              message: info.file,
-            });
-          } else if (info?.status === "done") {
-            onProgress({ status: "downloading", fraction: 1, message: info.file });
-          }
-        },
-      });
-      pipelineSingleton = pipe;
-      onProgress?.({ status: "ready", fraction: 1 });
-      return pipe;
-    } catch (err) {
-      inFlight = null;
-      const message = err instanceof Error ? err.message : String(err);
-      onProgress?.({ status: "error", fraction: 0, message });
-      throw err;
+let worker: Worker | null = null;
+let nextId = 0;
+const pending = new Map<
+  number,
+  { resolve: (words: string[]) => void; reject: (err: Error) => void }
+>();
+
+let cachedReady = false;
+let cachedError: string | null = null;
+let loadStarted = false;
+let progressFn: ((p: LoadProgress) => void) | null = null;
+const readyWaiters: Array<{ resolve: () => void; reject: (e: Error) => void }> =
+  [];
+
+function getWorker(): Worker {
+  if (worker) return worker;
+  worker = new Worker(new URL("./predictor.worker.ts", import.meta.url), {
+    type: "module",
+  });
+  worker.onmessage = (e: MessageEvent<WorkerMessage>) => {
+    const msg = e.data;
+    switch (msg.type) {
+      case "progress": {
+        const fraction = msg.total > 0 ? msg.loaded / msg.total : 0;
+        progressFn?.({
+          status: "downloading",
+          fraction,
+          message: msg.file,
+        });
+        break;
+      }
+      case "ready": {
+        cachedReady = true;
+        progressFn?.({ status: "ready", fraction: 1 });
+        for (const w of readyWaiters) w.resolve();
+        readyWaiters.length = 0;
+        break;
+      }
+      case "loadError": {
+        cachedError = msg.message;
+        progressFn?.({
+          status: "error",
+          fraction: 0,
+          message: msg.message,
+        });
+        const err = new Error(msg.message);
+        for (const w of readyWaiters) w.reject(err);
+        readyWaiters.length = 0;
+        break;
+      }
+      case "result":
+        pending.get(msg.id)?.resolve(msg.words);
+        pending.delete(msg.id);
+        break;
+      case "predictError":
+        pending.get(msg.id)?.reject(new Error(msg.message));
+        pending.delete(msg.id);
+        break;
     }
-  })();
+  };
+  return worker;
+}
 
-  return inFlight;
+/**
+ * Kick off (or join) the model load. The optional `onProgress` callback
+ * receives every progress tick plus the final ready/error event. The
+ * returned promise resolves once the worker reports "ready".
+ */
+export function loadPredictor(
+  onProgress?: (p: LoadProgress) => void,
+): Promise<void> {
+  if (onProgress) progressFn = onProgress;
+  const w = getWorker();
+  if (cachedReady) {
+    onProgress?.({ status: "ready", fraction: 1 });
+    return Promise.resolve();
+  }
+  if (cachedError) {
+    onProgress?.({ status: "error", fraction: 0, message: cachedError });
+    return Promise.reject(new Error(cachedError));
+  }
+  if (!loadStarted) {
+    loadStarted = true;
+    w.postMessage({ type: "load" });
+  }
+  return new Promise<void>((resolve, reject) => {
+    readyWaiters.push({ resolve, reject });
+  });
 }
 
 export type PredictOptions = {
-  /** How many distinct candidates to return. */
   k?: number;
-  /** Generation cap; 4 covers most English words plus a small buffer. */
   maxNewTokens?: number;
 };
 
 /**
- * Return up to `k` candidate words that continue the given text.
- *
- * Internally beam-searches a few extra candidates and de-dupes, since
- * beams often collapse onto the same word with different trailing
- * punctuation. We extract just the first "word" of each continuation
- * (letters + apostrophes) so the caller can drop it straight into the
- * transcript without further parsing.
+ * Send `text` to the worker for inference and return the top-k word
+ * continuations. Lowercasing/uppercasing and beam post-processing all
+ * happen inside the worker so the main thread never touches the model.
  */
 export async function predict(
   text: string,
   options: PredictOptions = {},
 ): Promise<string[]> {
-  const k = options.k ?? 3;
-  const maxNewTokens = options.maxNewTokens ?? 4;
   if (text.length === 0) return [];
-
-  // The keyboard is all-caps so the transcript is e.g. "HEL", but the
-  // language model was trained on natural text where uppercase mid-word
-  // is vanishingly rare (acronyms, proper nouns). Feeding "HEL" gets us
-  // weird Norse-mythology / Helsinki continuations; feeding "hel" gets
-  // us "hello". We lowercase for inference, then re-upper the result so
-  // it matches the transcript's style when inserted.
-  const lowered = text.toLowerCase();
-
-  const generator = await loadPredictor();
-  const beams = Math.max(k * 2, 5);
-  const raw = (await generator(lowered, {
-    max_new_tokens: maxNewTokens,
-    num_beams: beams,
-    num_return_sequences: beams,
-    do_sample: false,
-    early_stopping: true,
-    return_full_text: true,
-  })) as Array<{ generated_text: string }>;
-
-  const lastSpace = lowered.lastIndexOf(" ");
-  const partialWord = lowered.slice(lastSpace + 1);
-  const seen = new Set<string>();
-  const out: string[] = [];
-
-  for (const item of raw) {
-    // From the same character offset onward in the generated text, read
-    // forward to the next non-letter character. This reconstructs the
-    // *completed* word — important for mid-word completion where the
-    // model only adds a suffix to the user's prefix.
-    const after = item.generated_text.slice(lastSpace + 1).trimStart();
-    const match = after.match(/^([A-Za-z']+)/);
-    if (!match) continue;
-    const lower = match[1].toLowerCase();
-    // Filter: must extend the partial (if any), must not just echo it,
-    // must be unique in the result set.
-    if (partialWord && !lower.startsWith(partialWord)) continue;
-    if (lower === partialWord) continue;
-    if (seen.has(lower)) continue;
-    seen.add(lower);
-    out.push(lower.toUpperCase());
-    if (out.length >= k) break;
-  }
-
-  return out;
+  await loadPredictor();
+  const id = nextId++;
+  return new Promise<string[]>((resolve, reject) => {
+    pending.set(id, { resolve, reject });
+    getWorker().postMessage({
+      type: "predict",
+      id,
+      text,
+      k: options.k ?? 3,
+      maxNewTokens: options.maxNewTokens ?? 4,
+    });
+  });
 }
