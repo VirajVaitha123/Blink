@@ -15,6 +15,7 @@ type Props = {
 // is added without an entry here.
 const COMMAND_COLORS: Record<CommandEffect, string> = {
   resume: "#22c55e", // green-500
+  play: "#06b6d4", // cyan-500
   stop: "#ef4444", // red-500
   backspace: "#3b82f6", // blue-500
   clear: "#a855f7", // purple-500

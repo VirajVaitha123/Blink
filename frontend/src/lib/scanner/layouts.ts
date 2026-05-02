@@ -45,7 +45,12 @@ export const HIGHLIGHT_COLORS = [
  * in the last row. Resume is first so a quick blink cycle exits cleanly
  * without running anything destructive.
  */
-export type CommandEffect = "resume" | "stop" | "clear" | "backspace";
+export type CommandEffect =
+  | "resume"
+  | "stop"
+  | "clear"
+  | "backspace"
+  | "play";
 
 export type Command = {
   readonly id: CommandEffect;
@@ -54,6 +59,7 @@ export type Command = {
 
 export const DEFAULT_COMMANDS: readonly Command[] = [
   { id: "resume", label: "Resume" },
+  { id: "play", label: "▶ Play" },
   { id: "stop", label: "Stop" },
   { id: "backspace", label: "⌫ Backspace" },
   { id: "clear", label: "Clear all" },
