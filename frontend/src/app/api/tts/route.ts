@@ -49,7 +49,31 @@ async function resolveVoiceId(apiKey: string): Promise<string> {
   return pick.voice_id;
 }
 
+// Origin allowlist for the TTS proxy. The endpoint is unauthenticated and
+// each request bills our ElevenLabs free-tier character quota; without this
+// gate, a single curl loop from anywhere on the internet can drain the
+// monthly cap and leave the cousin without voice cues until it resets.
+// Browsers send `Origin` automatically and can't be tricked into spoofing
+// it from a different page, so this stops the opportunistic-abuse case.
+// FRONTEND_URL is the production domain; VERCEL_URL covers preview deploys.
+function isAllowedOrigin(origin: string | null): boolean {
+  if (!origin) return false;
+  const allowed = new Set(
+    [
+      process.env.FRONTEND_URL,
+      process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null,
+      "http://localhost:3000",
+      "http://localhost:3001",
+    ].filter((v): v is string => Boolean(v)),
+  );
+  return allowed.has(origin);
+}
+
 export async function POST(request: Request) {
+  if (!isAllowedOrigin(request.headers.get("origin"))) {
+    return new Response("forbidden", { status: 403 });
+  }
+
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) {
     return new Response("ELEVENLABS_API_KEY not configured", { status: 500 });
