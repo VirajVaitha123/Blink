@@ -18,7 +18,7 @@ import {
 import { usePredictor } from "@/lib/predict/usePredictor";
 import {
   DEFAULT_COMMANDS,
-  DEFAULT_GROUP_LABELS,
+  DEFAULT_GROUP_SPOKEN_LABELS,
   DEFAULT_GROUPS,
 } from "@/lib/scanner/layouts";
 import { useScanner } from "@/lib/scanner/useScanner";
@@ -36,7 +36,7 @@ const VOICE_CUES: readonly string[] = [
   "Backspace",
   "Suggestions",
   "Cancelled",
-  ...DEFAULT_GROUP_LABELS,
+  ...DEFAULT_GROUP_SPOKEN_LABELS,
 ];
 
 export default function Home() {
@@ -214,7 +214,7 @@ export default function Home() {
   const groupCursor = state.phase === "groupScan" ? state.cursor : -1;
   useEffect(() => {
     if (groupCursor < 0) return;
-    const label = DEFAULT_GROUP_LABELS[groupCursor];
+    const label = DEFAULT_GROUP_SPOKEN_LABELS[groupCursor];
     if (label) void speak(label);
   }, [groupCursor, speak]);
 

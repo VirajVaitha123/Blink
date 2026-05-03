@@ -26,12 +26,14 @@ export const DEFAULT_GROUPS: readonly Group[] = [
 ] as const;
 
 /**
- * Spoken label for a group, used by the TTS cue that fires when the
- * scanner cursor lands on the group during groupScan. Picks the first
- * and last *letter* in the group ("A to D"); ignores SPACE / BACKSPACE
- * / MENU symbols which aren't meaningfully announceable in this form.
+ * Visible label for a group ("A to D"). Picks the first and last
+ * *letter* in the group; ignores SPACE / BACKSPACE / MENU symbols
+ * which aren't meaningfully announceable in this form. The last group
+ * ("Y", "Z", SPACE, BACKSPACE, MENU) becomes "Y to Z".
  *
- * The last group ("Y", "Z", SPACE, BACKSPACE, MENU) becomes "Y to Z".
+ * For *spoken* labels, prefer `groupSpokenLabel` — TTS engines tend to
+ * mispronounce isolated letters ("A" → "uh") so we need to spell the
+ * letter names out phonetically.
  */
 export function groupLabel(group: Group): string {
   const letters = group.filter((c) => /^[A-Z]$/.test(c));
@@ -40,8 +42,40 @@ export function groupLabel(group: Group): string {
   return `${letters[0]} to ${letters[letters.length - 1]}`;
 }
 
+/**
+ * Phonetic letter-name spelling, so TTS reads "A" as "ay" (long A name)
+ * rather than "uh" (the indefinite article it's almost always treated
+ * as in natural text). Same trick used for product names, model
+ * numbers, etc. Tuned to American premade ElevenLabs voices ("zee"
+ * not "zed"); swap if the configured voice is British.
+ */
+const LETTER_PRONUNCIATION: Readonly<Record<string, string>> = {
+  A: "ay", B: "bee", C: "see", D: "dee", E: "ee", F: "ef", G: "gee",
+  H: "aitch", I: "eye", J: "jay", K: "kay", L: "el", M: "em", N: "en",
+  O: "oh", P: "pee", Q: "cue", R: "ar", S: "ess", T: "tee", U: "you",
+  V: "vee", W: "double you", X: "ex", Y: "why", Z: "zee",
+};
+
+function pronounce(letter: string): string {
+  return LETTER_PRONUNCIATION[letter] ?? letter;
+}
+
+/**
+ * Spoken form of `groupLabel` — fed directly to the TTS proxy.
+ * "A to D" → "ay to dee", "E to H" → "ee to aitch", etc.
+ */
+export function groupSpokenLabel(group: Group): string {
+  const letters = group.filter((c) => /^[A-Z]$/.test(c));
+  if (letters.length === 0) return "";
+  if (letters.length === 1) return pronounce(letters[0]);
+  return `${pronounce(letters[0])} to ${pronounce(letters[letters.length - 1])}`;
+}
+
 export const DEFAULT_GROUP_LABELS: readonly string[] =
   DEFAULT_GROUPS.map(groupLabel);
+
+export const DEFAULT_GROUP_SPOKEN_LABELS: readonly string[] =
+  DEFAULT_GROUPS.map(groupSpokenLabel);
 
 /**
  * Cycle of background colors used to highlight the active group. We cycle
