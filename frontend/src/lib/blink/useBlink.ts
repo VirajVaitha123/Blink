@@ -120,13 +120,13 @@ export const DEFAULT_BLINK_CONFIG: BlinkConfig = {
   lookRightLow: 0.2,
   lookRightHoldMs: 1000,
   // Look-left = backspace. Same hysteresis pair as the other gaze
-  // gestures, but slightly longer than look-up (60ms) because backspace
+  // gestures, but a touch longer than look-up (60ms) because backspace
   // is destructive — a brief extra confirmation prevents an
-  // off-to-the-side glance from accidentally eating a character. 100ms
-  // is ~3 frames at 30fps.
+  // off-to-the-side glance from accidentally eating a character. 150ms
+  // is ~5 frames at 30fps; landed here after 100ms felt slightly twitchy.
   lookLeftHigh: 0.4,
   lookLeftLow: 0.2,
-  lookLeftMinMs: 100,
+  lookLeftMinMs: 150,
 };
 
 /** Discrete state — flips a few times per session, safe to put in setState. */
