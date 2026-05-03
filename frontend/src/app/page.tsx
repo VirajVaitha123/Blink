@@ -33,6 +33,7 @@ const VOICE_CUES: readonly string[] = [
   "Opened menu",
   "Resumed",
   "Space",
+  "Backspace",
   "Suggestions",
   "Cancelled",
   ...DEFAULT_GROUP_LABELS,
@@ -150,6 +151,17 @@ export default function Home() {
         if (word) predictor.commit(word);
       }
       dispatch({ type: "select" });
+      return;
+    }
+    if (event.kind === "lookLeft") {
+      // Sustained left gaze: backspace. No phase guards — same pattern
+      // as the short-blink → space path above; text edits are always
+      // allowed regardless of which scan phase we're in. If the
+      // transcript is already empty, slice(0, -1) is a no-op so the
+      // cue still fires but nothing visible changes (acceptable; the
+      // alternative is silent failure which is more confusing).
+      dispatch({ type: "backspace" });
+      void speak("Backspace");
       return;
     }
     if (event.kind === "lookRight") {

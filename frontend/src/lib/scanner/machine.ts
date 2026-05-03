@@ -51,7 +51,8 @@ export type ScannerAction =
   | { type: "exitCommands" }
   | { type: "enterSuggestions"; suggestions: readonly string[] }
   | { type: "exitSuggestions" }
-  | { type: "insertChar"; char: string };
+  | { type: "insertChar"; char: string }
+  | { type: "backspace" };
 
 export type ScannerConfig = {
   groups: readonly Group[];
@@ -120,9 +121,18 @@ export function reduce(
 
     case "insertChar":
       // Append a character without altering scanner phase. Used by the
-      // look-up gesture for space, but generic so any external trigger
-      // can insert text.
+      // short-blink gesture for space, but generic so any external
+      // trigger can insert text.
       return { ...state, text: state.text + action.char };
+
+    case "backspace":
+      // Drop the last character without altering scanner phase. Used by
+      // the look-left gesture; mirrors how insertChar treats space.
+      // The Backspace command in the menu uses its own runCommand path
+      // (which also resets the menu cursor) — this action is for the
+      // gesture-driven case where the user just wants to delete and
+      // keep scanning.
+      return { ...state, text: state.text.slice(0, -1) };
 
     case "tick": {
       if (state.phase === "groupScan") {

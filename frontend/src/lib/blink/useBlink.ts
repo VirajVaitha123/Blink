@@ -40,7 +40,7 @@ import {
 } from "./detectors";
 import { extractFaceScores, loadFaceLandmarker } from "./landmarker";
 
-export type BlinkKind = "intent" | "long" | "lookUp" | "lookRight";
+export type BlinkKind = "intent" | "long" | "lookUp" | "lookRight" | "lookLeft";
 
 export type BlinkEvent = {
   kind: BlinkKind;
@@ -73,6 +73,12 @@ export type BlinkConfig = {
    * reversible affordance — release before this and nothing happens.
    */
   lookRightHoldMs: number;
+  /** Score threshold above which the user is considered to be looking left. */
+  lookLeftHigh: number;
+  /** Score threshold below which the look-left gesture is considered released. */
+  lookLeftLow: number;
+  /** Min sustained duration to fire a look-left (= backspace). */
+  lookLeftMinMs: number;
 };
 
 export const DEFAULT_BLINK_CONFIG: BlinkConfig = {
@@ -97,15 +103,15 @@ export const DEFAULT_BLINK_CONFIG: BlinkConfig = {
   // distances people use AAC apps from. Tune lower if needed for the user.
   lookUpHigh: 0.4,
   lookUpLow: 0.2,
-  // 125ms — effectively as instant as the per-frame inference allows
-  // (~30fps = ~33ms per frame, so this is ~4 frames of confirmation).
-  // Iterated down 500ms → 250ms → 125ms because the user kept finding
-  // it too laggy for a commit gesture. The 0.4/0.2 hysteresis is
-  // doing all the heavy lifting now: a glance has to *rotate the iris
-  // far enough* to cross 0.4, which is the actual filter against
-  // accidental glances. If false fires creep in we'll need to raise
-  // lookUpHigh (the entry threshold) rather than lookUpMinMs.
-  lookUpMinMs: 125,
+  // 60ms — at the floor of what's meaningful. The MediaPipe inference
+  // ticks at the camera's frame rate (~30fps = ~33ms per frame), so
+  // this is ~2 frames of confirmation. Going below ~33ms has no effect
+  // because the detector only sees one score per frame. Iterated down
+  // 500 → 250 → 125 → 60ms because the user wanted commit to feel
+  // immediate. The 0.4/0.2 hysteresis is doing all the filtering now;
+  // raise lookUpHigh (entry threshold) rather than this if false fires
+  // creep in.
+  lookUpMinMs: 60,
   // Look-right uses the same hysteresis pair as look-up — the underlying
   // blendshapes have similar dynamic range. 1000ms hold matches the user's
   // expectation that a short glance off-screen is forgiven and only a
@@ -113,6 +119,14 @@ export const DEFAULT_BLINK_CONFIG: BlinkConfig = {
   lookRightHigh: 0.4,
   lookRightLow: 0.2,
   lookRightHoldMs: 1000,
+  // Look-left = backspace. Same hysteresis pair as the other gaze
+  // gestures, but slightly longer than look-up (60ms) because backspace
+  // is destructive — a brief extra confirmation prevents an
+  // off-to-the-side glance from accidentally eating a character. 100ms
+  // is ~3 frames at 30fps.
+  lookLeftHigh: 0.4,
+  lookLeftLow: 0.2,
+  lookLeftMinMs: 100,
 };
 
 /** Discrete state — flips a few times per session, safe to put in setState. */
@@ -122,6 +136,7 @@ export type BlinkDiscreteState = {
   isClosed: boolean;
   isLookingUp: boolean;
   isLookingRight: boolean;
+  isLookingLeft: boolean;
   error: string | null;
 };
 
@@ -133,6 +148,8 @@ export type BlinkMetrics = {
   upForMs: number;
   rightness: number;
   rightForMs: number;
+  leftness: number;
+  leftForMs: number;
 };
 
 /**
@@ -151,6 +168,8 @@ const ZERO_METRICS: BlinkMetrics = {
   upForMs: 0,
   rightness: 0,
   rightForMs: 0,
+  leftness: 0,
+  leftForMs: 0,
 };
 
 const INITIAL_DISCRETE: BlinkDiscreteState = {
@@ -159,6 +178,7 @@ const INITIAL_DISCRETE: BlinkDiscreteState = {
   isClosed: false,
   isLookingUp: false,
   isLookingRight: false,
+  isLookingLeft: false,
   error: null,
 };
 
@@ -246,6 +266,12 @@ export function useBlink({
       exitThreshold: cfg.lookRightLow,
       sustainMs: cfg.lookRightHoldMs,
     });
+    const lookLeftDetector = createSustainDetector({
+      kind: "lookLeft" as const,
+      enterThreshold: cfg.lookLeftHigh,
+      exitThreshold: cfg.lookLeftLow,
+      sustainMs: cfg.lookLeftMinMs,
+    });
 
     // Tracks the discrete fields we last published, so we only call
     // setState when something actually flipped — avoids spurious renders.
@@ -258,6 +284,7 @@ export function useBlink({
         next.isClosed === lastDiscrete.isClosed &&
         next.isLookingUp === lastDiscrete.isLookingUp &&
         next.isLookingRight === lastDiscrete.isLookingRight &&
+        next.isLookingLeft === lastDiscrete.isLookingLeft &&
         next.error === lastDiscrete.error
       ) {
         return;
@@ -307,6 +334,7 @@ export function useBlink({
               blinkDetector.reset();
               lookUpDetector.reset();
               lookRightDetector.reset();
+              lookLeftDetector.reset();
 
               const m = metricsRef.current;
               m.closedness = 0;
@@ -315,6 +343,8 @@ export function useBlink({
               m.upForMs = 0;
               m.rightness = 0;
               m.rightForMs = 0;
+              m.leftness = 0;
+              m.leftForMs = 0;
               notifyMetricsThrottled(now);
 
               publishDiscreteIfChanged({
@@ -323,6 +353,7 @@ export function useBlink({
                 isClosed: false,
                 isLookingUp: false,
                 isLookingRight: false,
+                isLookingLeft: false,
               });
             } else {
               const closedness = (scores.blinkLeft + scores.blinkRight) / 2;
@@ -332,6 +363,9 @@ export function useBlink({
               // signal robust to per-eye blendshape noise.
               const rightness =
                 (scores.lookOutRight + scores.lookInLeft) / 2;
+              // Looking left: mirror — left eye outward + right eye inward.
+              const leftness =
+                (scores.lookOutLeft + scores.lookInRight) / 2;
 
               dispatch(blinkDetector, closedness, now);
 
@@ -344,9 +378,11 @@ export function useBlink({
               if (inBlink) {
                 lookUpDetector.reset();
                 lookRightDetector.reset();
+                lookLeftDetector.reset();
               } else {
                 dispatch(lookUpDetector, upness, now);
                 dispatch(lookRightDetector, rightness, now);
+                dispatch(lookLeftDetector, leftness, now);
               }
 
               const m = metricsRef.current;
@@ -356,6 +392,8 @@ export function useBlink({
               m.upForMs = lookUpDetector.holdMs;
               m.rightness = rightness;
               m.rightForMs = lookRightDetector.holdMs;
+              m.leftness = leftness;
+              m.leftForMs = lookLeftDetector.holdMs;
               notifyMetricsThrottled(now);
 
               publishDiscreteIfChanged({
@@ -364,6 +402,7 @@ export function useBlink({
                 isClosed: blinkDetector.holdMs > 0,
                 isLookingUp: lookUpDetector.holdMs > 0,
                 isLookingRight: lookRightDetector.holdMs > 0,
+                isLookingLeft: lookLeftDetector.holdMs > 0,
                 error: null,
               });
             }
