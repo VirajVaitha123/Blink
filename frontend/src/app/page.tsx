@@ -42,13 +42,11 @@ const VOICE_CUES: readonly string[] = [
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
-  // 1300ms — slowed from 1050ms now that selection moved from blink to
-  // look-up (see handleBlinkEvent). The look-up gesture needs a 500ms
-  // sustained gaze to count, which is ~38% of one cycle at 1300ms — at
-  // the old 1050ms the user only had ~550ms after the cursor landed
-  // before it ticked away, which was too tight. Tunable live via the
-  // slider (500–3000ms).
-  const [scanMs, setScanMs] = useState(1300);
+  // 1600ms — bumped from 1500ms for a touch more breathing room
+  // between the audio cue finishing and the cursor advancing. The
+  // gesture isn't the constraint anymore (look-up commit is ~60ms);
+  // pure audio-pacing tune. Tunable live via the slider (500–3000ms).
+  const [scanMs, setScanMs] = useState(1600);
 
   const { state, dispatch } = useScanner({
     scanMs,
