@@ -2,16 +2,24 @@
 
 import { useCallback, useEffect, useRef } from "react";
 
+import { STATIC_AUDIO } from "./staticAudio";
+
 /**
- * Plays short audio cues via the /api/tts ElevenLabs proxy.
+ * Plays short audio cues. Two sources, transparent to callers:
  *
- * The first time a phrase is requested we fetch and decode the MP3, cache
- * the resulting blob URL, then play it. Subsequent calls reuse the cached
- * URL so cues fire instantly with no network round-trip — important for
- * the scanner where a delayed "Starting" defeats the purpose.
+ *   - **Static manifest** (`STATIC_AUDIO`): pre-recorded MP3s in
+ *     /public/audio/ for cues whose TTS rendering sounded off (the
+ *     letter-name cues "A. to. D." etc.). Returned as a static URL —
+ *     no API call, no quota burn, instant first play after the
+ *     browser has cached the file.
  *
- * Pass `prewarm` phrases to fetch them on mount so the very first long
- * blink already has audio ready.
+ *   - **ElevenLabs proxy** (`/api/tts`): everything else. The first
+ *     play fetches and decodes the MP3, caches the blob URL, then
+ *     plays. Subsequent plays of the same phrase reuse the cache.
+ *
+ * Pass `prewarm` phrases to warm both paths on mount — for static
+ * URLs we issue a fetch so the browser caches the file; for API
+ * URLs we fetch through the proxy and cache the blob.
  */
 export function useVoiceCues(prewarm: readonly string[] = []) {
   const cacheRef = useRef<Map<string, string>>(new Map());
@@ -20,6 +28,19 @@ export function useVoiceCues(prewarm: readonly string[] = []) {
   const fetchUrl = useCallback(async (text: string): Promise<string> => {
     const cached = cacheRef.current.get(text);
     if (cached) return cached;
+
+    // Static manifest: hand back the pre-recorded URL directly. We
+    // also kick off a `fetch` so the browser warms its HTTP cache; by
+    // the time `new Audio(url).play()` runs in `speak`, the bytes are
+    // already local. The fetch is fire-and-forget — failure just
+    // means the first play has its usual ~50ms HTTP fetch.
+    const staticUrl = STATIC_AUDIO[text];
+    if (staticUrl) {
+      cacheRef.current.set(text, staticUrl);
+      void fetch(staticUrl).catch(() => {});
+      return staticUrl;
+    }
+
     const res = await fetch("/api/tts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
