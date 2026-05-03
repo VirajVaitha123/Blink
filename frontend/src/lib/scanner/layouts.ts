@@ -43,32 +43,21 @@ export function groupLabel(group: Group): string {
 }
 
 /**
- * Phonetic letter-name spelling, so TTS reads "A" as "ay" (long A name)
- * rather than "uh" (the indefinite article it's almost always treated
- * as in natural text). Same trick used for product names, model
- * numbers, etc. Tuned to American premade ElevenLabs voices ("zee"
- * not "zed"); swap if the configured voice is British.
- */
-const LETTER_PRONUNCIATION: Readonly<Record<string, string>> = {
-  A: "ay", B: "bee", C: "see", D: "dee", E: "ee", F: "ef", G: "gee",
-  H: "aitch", I: "eye", J: "jay", K: "kay", L: "el", M: "em", N: "en",
-  O: "oh", P: "pee", Q: "cue", R: "ar", S: "ess", T: "tee", U: "you",
-  V: "vee", W: "double you", X: "ex", Y: "why", Z: "zee",
-};
-
-function pronounce(letter: string): string {
-  return LETTER_PRONUNCIATION[letter] ?? letter;
-}
-
-/**
- * Spoken form of `groupLabel` — fed directly to the TTS proxy.
- * "A to D" → "ay to dee", "E to H" → "ee to aitch", etc.
+ * Spoken form of `groupLabel`, e.g. "A. to. D.". Used as the cue key
+ * for both the static-audio manifest in /public/audio/ (where most of
+ * these resolve to a pre-recorded MP3) and the ElevenLabs TTS fallback
+ * for any group without a recorded clip.
+ *
+ * Periods after each token nudge the TTS engine to treat the letters
+ * as discrete units rather than running "A" into the article "uh".
+ * The static-audio manifest keys must match these strings exactly —
+ * change one and update the other.
  */
 export function groupSpokenLabel(group: Group): string {
   const letters = group.filter((c) => /^[A-Z]$/.test(c));
   if (letters.length === 0) return "";
-  if (letters.length === 1) return pronounce(letters[0]);
-  return `${pronounce(letters[0])} to ${pronounce(letters[letters.length - 1])}`;
+  if (letters.length === 1) return `${letters[0]}.`;
+  return `${letters[0]}. to. ${letters[letters.length - 1]}.`;
 }
 
 export const DEFAULT_GROUP_LABELS: readonly string[] =

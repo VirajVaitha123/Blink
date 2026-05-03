@@ -2,11 +2,14 @@
 
 import ReactDOM from "react-dom";
 
+import { STATIC_AUDIO } from "@/lib/voice/staticAudio";
+
 /**
  * Resource hints emitted into the document <head> at the start of the
- * page lifecycle. We preload the wordlist + the MediaPipe model so the
- * browser fetches them in parallel with our JS instead of waiting for
- * `usePredictor` / `useBlink` to ask. Saves ~100-200ms on cold start.
+ * page lifecycle. We preload the wordlist, the MediaPipe model, and the
+ * static voice cues so the browser fetches them in parallel with our JS
+ * instead of waiting for the relevant hook to ask. Saves ~100-200ms on
+ * cold start.
  *
  * The component renders nothing — the side-effect is the registered hint.
  *
@@ -28,5 +31,11 @@ export function PreloadResources() {
     as: "fetch",
     crossOrigin: "anonymous",
   });
+  // Static voice cues — small (~50KB each, ~330KB total). Preloading
+  // means the very first scan group fires the cue with zero network
+  // delay; without this the first "A. to. D." has a ~50ms HTTP fetch.
+  for (const url of Object.values(STATIC_AUDIO)) {
+    ReactDOM.preload(url, { as: "audio" });
+  }
   return null;
 }
