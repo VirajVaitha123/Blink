@@ -95,7 +95,7 @@ function DwellFill({
   holdMs: number;
   enabled: boolean;
 }) {
-  const rightForMs = useBlinkMetric(blink, (m) => m.rightForMs);
+  const rightForMs = useBlinkMetric(blink, "rightForMs");
   const fraction = enabled ? Math.min(1, rightForMs / holdMs) : 0;
   return (
     <div

@@ -13,8 +13,9 @@
  *                   suggestion-card "fill" completes), opening the
  *                   suggestion picker
  *
- * Each gesture has hysteresis (separate enter/exit thresholds) to keep
- * detection stable as scores wobble around the threshold.
+ * Detection logic (hysteresis + episode latching) lives in `detectors.ts`
+ * — this hook is just the MediaPipe lifecycle, the rAF loop, and the
+ * React-state plumbing.
  *
  * State is split into two channels:
  *
@@ -22,18 +23,21 @@
  *     (ready, faceDetected, isClosed, isLookingUp, isLookingRight, error).
  *     Most components only need this; they don't re-render every frame.
  *
- *   - "metrics" lives in a ref + a tiny pub/sub. The MediaPipe rAF tick
- *     mutates the ref in place and notifies listeners every frame. Any
- *     component that needs to animate from a continuous value (the dwell
- *     fill bar, the meter bars, the closedness/upness debug stats) uses
- *     `useBlinkMetric` to subscribe with throttling. Without this split,
- *     ~30 setStates per second forced the entire <Home> tree to reconcile
- *     and made the page feel laggy.
+ *   - "metrics" lives in a ref + a throttled pub/sub shaped for React's
+ *     `useSyncExternalStore`. The MediaPipe rAF tick mutates the ref in
+ *     place every frame and notifies listeners at most every NOTIFY_MS.
+ *     `useBlinkMetric` pulls a single field by key and lets React skip
+ *     re-renders when nothing it cares about changed.
  */
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import {
+  createBlinkDetector,
+  createSustainDetector,
+  type Detector,
+} from "./detectors";
 import { extractFaceScores, loadFaceLandmarker } from "./landmarker";
 
 export type BlinkKind = "intent" | "long" | "lookUp" | "lookRight";
@@ -122,6 +126,15 @@ export type BlinkMetrics = {
   rightForMs: number;
 };
 
+/**
+ * How often the metrics pub/sub wakes subscribers, in ms. The rAF tick
+ * mutates the ref every frame regardless; subscribers (e.g. the meter
+ * bars, the dwell-fill) only get the chance to re-render every NOTIFY_MS.
+ * 100ms paired with the existing CSS `transition-[width] duration-75`
+ * animation on the bars looks indistinguishable from per-frame updates.
+ */
+const NOTIFY_MS = 100;
+
 const ZERO_METRICS: BlinkMetrics = {
   closedness: 0,
   closedForMs: 0,
@@ -140,16 +153,16 @@ const INITIAL_DISCRETE: BlinkDiscreteState = {
   error: null,
 };
 
-export type MetricsListener = (m: Readonly<BlinkMetrics>) => void;
-
 export type BlinkRuntime = BlinkDiscreteState & {
   /** Read-only handle to the latest metrics. Mutated in place each frame. */
   readonly metricsRef: { readonly current: Readonly<BlinkMetrics> };
   /**
-   * Subscribe to per-frame metric updates. Listener is called after each
-   * inference tick with the current metrics. Returns an unsubscribe fn.
+   * `useSyncExternalStore`-shaped subscribe. Listener is called (with no
+   * args) when metrics may have changed; consumers re-read from
+   * `metricsRef.current` to get the latest values. Throttled to NOTIFY_MS
+   * so high-frequency frames don't kick React more than ~10×/second.
    */
-  subscribeMetrics(listener: MetricsListener): () => void;
+  subscribe(listener: () => void): () => void;
 };
 
 export type UseBlinkOptions = {
@@ -183,10 +196,10 @@ export function useBlink({
 
   // Listeners for the metrics pub/sub. Stored in a ref so subscribe/notify
   // don't need to be redeclared between renders.
-  const listenersRef = useRef<Set<MetricsListener>>(new Set());
+  const listenersRef = useRef<Set<() => void>>(new Set());
 
-  const subscribeMetrics = useMemo(
-    () => (listener: MetricsListener) => {
+  const subscribe = useMemo(
+    () => (listener: () => void) => {
       listenersRef.current.add(listener);
       return () => {
         listenersRef.current.delete(listener);
@@ -194,19 +207,6 @@ export function useBlink({
     },
     [],
   );
-
-  // Blink-episode tracking
-  const closedStartRef = useRef<number | null>(null);
-  const longFiredRef = useRef(false);
-
-  // Look-up-episode tracking
-  const upStartRef = useRef<number | null>(null);
-  const lookUpFiredRef = useRef(false);
-
-  // Look-right-episode tracking. Same fire-on-cross-threshold model as
-  // look-up: one event per sustained-gaze episode, latched until release.
-  const rightStartRef = useRef<number | null>(null);
-  const lookRightFiredRef = useRef(false);
 
   useEffect(() => {
     if (!enabled) return;
@@ -216,6 +216,27 @@ export function useBlink({
     let cancelled = false;
     let rafId: number | null = null;
     let lastVideoTime = -1;
+    let lastNotifyAt = 0;
+
+    // Per-detector state lives outside React; reset on enabled-cycle.
+    const blinkDetector = createBlinkDetector({
+      closedThreshold: cfg.closedThreshold,
+      openThreshold: cfg.openThreshold,
+      intentMinMs: cfg.intentMinMs,
+      longMinMs: cfg.longMinMs,
+    });
+    const lookUpDetector = createSustainDetector({
+      kind: "lookUp" as const,
+      enterThreshold: cfg.lookUpHigh,
+      exitThreshold: cfg.lookUpLow,
+      sustainMs: cfg.lookUpMinMs,
+    });
+    const lookRightDetector = createSustainDetector({
+      kind: "lookRight" as const,
+      enterThreshold: cfg.lookRightHigh,
+      exitThreshold: cfg.lookRightLow,
+      sustainMs: cfg.lookRightHoldMs,
+    });
 
     // Tracks the discrete fields we last published, so we only call
     // setState when something actually flipped — avoids spurious renders.
@@ -236,9 +257,25 @@ export function useBlink({
       setDiscrete(next);
     };
 
-    const notifyMetrics = () => {
-      const m = metricsRef.current;
-      for (const listener of listenersRef.current) listener(m);
+    const notifyMetricsThrottled = (now: number) => {
+      if (now - lastNotifyAt < NOTIFY_MS) return;
+      lastNotifyAt = now;
+      for (const listener of listenersRef.current) listener();
+    };
+
+    const dispatch = <K extends BlinkKind>(
+      detector: Detector<K>,
+      score: number,
+      now: number,
+    ) => {
+      const event = detector.update(score, now);
+      if (event) {
+        onEventRef.current?.({
+          kind: event.kind,
+          durationMs: event.durationMs,
+          at: now,
+        });
+      }
     };
 
     (async () => {
@@ -256,14 +293,11 @@ export function useBlink({
             const scores = extractFaceScores(result);
 
             if (!scores) {
-              // No face — reset all tracking so we don't spuriously fire on
-              // re-acquire.
-              closedStartRef.current = null;
-              longFiredRef.current = false;
-              upStartRef.current = null;
-              lookUpFiredRef.current = false;
-              rightStartRef.current = null;
-              lookRightFiredRef.current = false;
+              // No face — reset all detectors so we don't spuriously fire
+              // on re-acquire.
+              blinkDetector.reset();
+              lookUpDetector.reset();
+              lookRightDetector.reset();
 
               const m = metricsRef.current;
               m.closedness = 0;
@@ -272,7 +306,7 @@ export function useBlink({
               m.upForMs = 0;
               m.rightness = 0;
               m.rightForMs = 0;
-              notifyMetrics();
+              notifyMetricsThrottled(now);
 
               publishDiscreteIfChanged({
                 ...lastDiscrete,
@@ -290,133 +324,37 @@ export function useBlink({
               const rightness =
                 (scores.lookOutRight + scores.lookInLeft) / 2;
 
-              // Blink state
-              const wasClosed = closedStartRef.current !== null;
-              const isClosed = wasClosed
-                ? closedness > cfg.openThreshold
-                : closedness > cfg.closedThreshold;
+              dispatch(blinkDetector, closedness, now);
 
-              if (isClosed && !wasClosed) {
-                closedStartRef.current = now;
-                longFiredRef.current = false;
-              } else if (!isClosed && wasClosed) {
-                const duration = now - (closedStartRef.current ?? now);
-                closedStartRef.current = null;
-                if (longFiredRef.current) {
-                  // Long already fired; ignore the trailing release.
-                } else if (duration >= cfg.intentMinMs) {
-                  onEventRef.current?.({
-                    kind: "intent",
-                    durationMs: duration,
-                    at: now,
-                  });
-                }
-                longFiredRef.current = false;
-              } else if (
-                isClosed &&
-                wasClosed &&
-                !longFiredRef.current &&
-                now - (closedStartRef.current ?? now) >= cfg.longMinMs
-              ) {
-                // Crossed the long threshold while still closed — fire now so
-                // the user gets feedback without having to open their eyes.
-                longFiredRef.current = true;
-                onEventRef.current?.({
-                  kind: "long",
-                  durationMs: now - (closedStartRef.current ?? now),
-                  at: now,
-                });
-              }
-
-              // Look-up and look-right state.
-              // Suppress while eyes are closed: gaze blendshapes aren't
-              // meaningful during a blink, and we don't want "blink and roll
-              // eyes up" to count as a deliberate gesture.
-              if (isClosed) {
-                upStartRef.current = null;
-                lookUpFiredRef.current = false;
-                rightStartRef.current = null;
-                lookRightFiredRef.current = false;
+              // Suppress gaze tracking while eyes are closed: gaze
+              // blendshapes aren't meaningful during a blink, and we don't
+              // want "blink and roll eyes up" to count as a deliberate
+              // gesture. blinkDetector.holdMs > 0 means we're in a blink
+              // episode right now.
+              const inBlink = blinkDetector.holdMs > 0;
+              if (inBlink) {
+                lookUpDetector.reset();
+                lookRightDetector.reset();
               } else {
-                const wasUp = upStartRef.current !== null;
-                const isUp = wasUp
-                  ? upness > cfg.lookUpLow
-                  : upness > cfg.lookUpHigh;
-
-                if (isUp && !wasUp) {
-                  upStartRef.current = now;
-                  lookUpFiredRef.current = false;
-                } else if (!isUp && wasUp) {
-                  upStartRef.current = null;
-                  lookUpFiredRef.current = false;
-                } else if (
-                  isUp &&
-                  wasUp &&
-                  !lookUpFiredRef.current &&
-                  now - (upStartRef.current ?? now) >= cfg.lookUpMinMs
-                ) {
-                  // Sustained — fire once per episode.
-                  lookUpFiredRef.current = true;
-                  onEventRef.current?.({
-                    kind: "lookUp",
-                    durationMs: now - (upStartRef.current ?? now),
-                    at: now,
-                  });
-                }
-
-                // Look-right: same fill-then-fire model as look-up. The UI
-                // shows a single fill bar across the suggestion card while
-                // rightForMs grows toward lookRightHoldMs; crossing the
-                // threshold fires once and opens the picker.
-                const wasRight = rightStartRef.current !== null;
-                const isRight = wasRight
-                  ? rightness > cfg.lookRightLow
-                  : rightness > cfg.lookRightHigh;
-
-                if (isRight && !wasRight) {
-                  rightStartRef.current = now;
-                  lookRightFiredRef.current = false;
-                } else if (!isRight && wasRight) {
-                  rightStartRef.current = null;
-                  lookRightFiredRef.current = false;
-                } else if (
-                  isRight &&
-                  wasRight &&
-                  !lookRightFiredRef.current &&
-                  now - (rightStartRef.current ?? now) >= cfg.lookRightHoldMs
-                ) {
-                  lookRightFiredRef.current = true;
-                  onEventRef.current?.({
-                    kind: "lookRight",
-                    durationMs: now - (rightStartRef.current ?? now),
-                    at: now,
-                  });
-                }
+                dispatch(lookUpDetector, upness, now);
+                dispatch(lookRightDetector, rightness, now);
               }
 
-              // Mutate metrics in place — no React state, no re-render.
               const m = metricsRef.current;
               m.closedness = closedness;
-              m.closedForMs =
-                closedStartRef.current !== null
-                  ? now - closedStartRef.current
-                  : 0;
+              m.closedForMs = blinkDetector.holdMs;
               m.upness = upness;
-              m.upForMs =
-                upStartRef.current !== null ? now - upStartRef.current : 0;
+              m.upForMs = lookUpDetector.holdMs;
               m.rightness = rightness;
-              m.rightForMs =
-                rightStartRef.current !== null
-                  ? now - rightStartRef.current
-                  : 0;
-              notifyMetrics();
+              m.rightForMs = lookRightDetector.holdMs;
+              notifyMetricsThrottled(now);
 
               publishDiscreteIfChanged({
                 ready: true,
                 faceDetected: true,
-                isClosed,
-                isLookingUp: upStartRef.current !== null,
-                isLookingRight: rightStartRef.current !== null,
+                isClosed: blinkDetector.holdMs > 0,
+                isLookingUp: lookUpDetector.holdMs > 0,
+                isLookingRight: lookRightDetector.holdMs > 0,
                 error: null,
               });
             }
@@ -460,8 +398,8 @@ export function useBlink({
     () => ({
       ...discrete,
       metricsRef,
-      subscribeMetrics,
+      subscribe,
     }),
-    [discrete, subscribeMetrics],
+    [discrete, subscribe],
   );
 }
