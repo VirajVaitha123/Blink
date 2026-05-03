@@ -9,7 +9,34 @@ import type { NextConfig } from "next";
 // vars like ELEVENLABS_API_KEY are available in route handlers.
 loadRootEnv();
 
-const nextConfig: NextConfig = {};
+// Security response headers applied to every route. Defense-in-depth: the
+// app has very low XSS surface (no dangerouslySetInnerHTML, transcript
+// rendered as text), but these stop a few classes of attack outright with
+// no runtime cost.
+//
+//   X-Frame-Options:           refuses iframe embedding so a malicious
+//                              wrapper page can't overlay UI on top of
+//                              the camera permission prompt
+//   X-Content-Type-Options:    blocks MIME sniffing
+//   Referrer-Policy:           limits URL leakage to third parties
+//   Permissions-Policy:        even a compromised dep can't silently
+//                              request microphone/geolocation/etc.;
+//                              camera is the only thing the app uses
+const SECURITY_HEADERS = [
+  { key: "X-Frame-Options", value: "DENY" },
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  {
+    key: "Permissions-Policy",
+    value: "camera=(self), microphone=(), geolocation=(), payment=()",
+  },
+];
+
+const nextConfig: NextConfig = {
+  async headers() {
+    return [{ source: "/:path*", headers: SECURITY_HEADERS }];
+  },
+};
 
 export default nextConfig;
 
