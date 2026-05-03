@@ -20,10 +20,12 @@ export function PreloadResources() {
     as: "fetch",
     crossOrigin: "anonymous",
   });
-  // MediaPipe fetches its ~3MB face_landmarker.task model from this
-  // Google bucket; opening the connection early shaves the TLS round-trip
-  // off the cold-start path.
-  ReactDOM.preconnect("https://storage.googleapis.com", {
+  // The face_landmarker model is ~3.6MB and blocks blink detection until
+  // it loads. Preloading it from our own /public means the browser starts
+  // the fetch in parallel with JS evaluation — same trick as the wordlist,
+  // shaves ~100-200ms off the cold-start path before useBlink asks for it.
+  ReactDOM.preload("/mediapipe/face_landmarker.task", {
+    as: "fetch",
     crossOrigin: "anonymous",
   });
   return null;

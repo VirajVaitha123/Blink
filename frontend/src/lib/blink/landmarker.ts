@@ -19,14 +19,12 @@ import {
   type FaceLandmarkerResult,
 } from "@mediapipe/tasks-vision";
 
-// WASM is served from /public so the version always matches the installed
-// `@mediapipe/tasks-vision` (no CDN drift, no cross-origin surprises).
+// WASM and the face_landmarker model are both served from /public so the
+// page makes zero third-party requests on cold load. Pinning the model in
+// the repo (~3.6MB) means Google can't silently swap weights under us and
+// no visitor IP/UA leaks to storage.googleapis.com.
 const WASM_BASE = "/mediapipe/wasm";
-
-// The face_landmarker model lives on Google's official models bucket.
-// ~3MB; we self-host later if we want offline support.
-const MODEL_URL =
-  "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+const MODEL_URL = "/mediapipe/face_landmarker.task";
 
 export type FaceScores = {
   /** eyeBlinkLeft blendshape (0..1; 1 = fully closed). */
