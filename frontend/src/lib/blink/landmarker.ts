@@ -5,10 +5,12 @@
  *
  * Per-frame we extract:
  *   - eyeBlinkLeft / eyeBlinkRight     → drives the blink hook (intent + long)
- *   - eyeLookUpLeft / eyeLookUpRight   → drives the look-up gesture (= space)
+ *   - eyeLookUpLeft / eyeLookUpRight   → drives the look-up gesture (= select)
  *   - eyeLookOutRight + eyeLookInLeft  → drives the look-right gesture
- *     (cycles + commits a suggestion chip). Both eyes pointing right from
- *     the user's POV means right eye outward + left eye inward.
+ *     (opens the suggestion picker). Both eyes pointing right from the
+ *     user's POV means right eye outward + left eye inward.
+ *   - eyeLookOutLeft + eyeLookInRight  → drives the look-left gesture
+ *     (= backspace). Mirror of the look-right pair.
  *
  * Higher-level intent detection (short blink vs long blink vs sustained
  * look-up vs noise) lives in `useBlink.ts`.
@@ -39,6 +41,10 @@ export type FaceScores = {
   lookOutRight: number;
   /** eyeLookInLeft blendshape (left eye rotates inward = looking right). */
   lookInLeft: number;
+  /** eyeLookOutLeft blendshape (left eye rotates outward = looking left). */
+  lookOutLeft: number;
+  /** eyeLookInRight blendshape (right eye rotates inward = looking left). */
+  lookInRight: number;
 };
 
 let landmarkerSingleton: FaceLandmarker | null = null;
@@ -73,6 +79,8 @@ export function extractFaceScores(
     lookUpRight: 0,
     lookOutRight: 0,
     lookInLeft: 0,
+    lookOutLeft: 0,
+    lookInRight: 0,
   };
   for (const cat of blendshapes) {
     switch (cat.categoryName) {
@@ -93,6 +101,12 @@ export function extractFaceScores(
         break;
       case "eyeLookInLeft":
         out.lookInLeft = cat.score;
+        break;
+      case "eyeLookOutLeft":
+        out.lookOutLeft = cat.score;
+        break;
+      case "eyeLookInRight":
+        out.lookInRight = cat.score;
         break;
     }
   }

@@ -55,12 +55,22 @@ async function resolveVoiceId(apiKey: string): Promise<string> {
 // monthly cap and leave the cousin without voice cues until it resets.
 // Browsers send `Origin` automatically and can't be tricked into spoofing
 // it from a different page, so this stops the opportunistic-abuse case.
-// FRONTEND_URL is the production domain; VERCEL_URL covers preview deploys.
+//
+// Vercel exposes three useful env vars here:
+//   - VERCEL_PROJECT_PRODUCTION_URL — the production alias (e.g.
+//     blink-five-eta.vercel.app). The previous version of this allowlist
+//     missed this and broke audio in prod until it was caught.
+//   - VERCEL_URL                    — the per-deployment URL (preview
+//     and prod alike), e.g. blink-abc123-foo.vercel.app
+//   - FRONTEND_URL                  — explicit override / custom domain
 function isAllowedOrigin(origin: string | null): boolean {
   if (!origin) return false;
   const allowed = new Set(
     [
       process.env.FRONTEND_URL,
+      process.env.VERCEL_PROJECT_PRODUCTION_URL
+        ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+        : null,
       process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null,
       "http://localhost:3000",
       "http://localhost:3001",
