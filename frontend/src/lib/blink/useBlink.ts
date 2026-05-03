@@ -78,12 +78,13 @@ export type BlinkConfig = {
 export const DEFAULT_BLINK_CONFIG: BlinkConfig = {
   closedThreshold: 0.5,
   openThreshold: 0.35,
-  // 160ms — small step down from 170ms after the user found 170ms felt
-  // slightly effortful. Still above the involuntary-blink range
-  // (~100-130ms) so reflex blinks don't fire selections, but a relaxed
-  // deliberate blink registers without needing to be exaggerated. 150ms
-  // was too low (faint blinks slipped through), 170ms was too high.
-  intentMinMs: 160,
+  // 500ms — under the new control scheme a short-but-sustained blink
+  // (released between intentMinMs and longMinMs) inserts a *space*; the
+  // *select* gesture moved to look-up. The threshold is deliberately
+  // well above the involuntary-blink range (~100-130ms) and even above
+  // a casual eye-rest blink (~250ms), so spaces only fire when the user
+  // clearly closes their eyes for half a second on purpose.
+  intentMinMs: 500,
   // 1500ms felt the right point in testing — comfortably above the
   // intent threshold so accidental fires are unlikely, but short enough
   // that opening the command menu mid-scan doesn't feel laborious.

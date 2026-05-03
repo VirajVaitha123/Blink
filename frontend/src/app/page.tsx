@@ -16,28 +16,38 @@ import {
   type BlinkEvent,
 } from "@/lib/blink/useBlink";
 import { usePredictor } from "@/lib/predict/usePredictor";
-import { DEFAULT_COMMANDS, DEFAULT_GROUPS } from "@/lib/scanner/layouts";
+import {
+  DEFAULT_COMMANDS,
+  DEFAULT_GROUP_LABELS,
+  DEFAULT_GROUPS,
+} from "@/lib/scanner/layouts";
 import { useScanner } from "@/lib/scanner/useScanner";
 import { useVoiceCues } from "@/lib/voice/useVoiceCues";
 
 // Stable identity so useVoiceCues' prewarm effect doesn't re-run each render.
-const VOICE_CUES = [
+// Group labels ("A to D", "E to H", …) are spoken every time the cursor lands
+// on a group during scanning, so they're prewarmed alongside the static cues
+// — the very first announcement should fire instantly with no API round-trip.
+const VOICE_CUES: readonly string[] = [
   "Starting",
   "Opened menu",
   "Resumed",
   "Space",
   "Suggestions",
   "Cancelled",
-] as const;
+  ...DEFAULT_GROUP_LABELS,
+];
 
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
-  // 1050ms — settled here after iterating: 1000ms was a touch too brisk,
-  // 1100ms felt slightly slow. The slider step is 50ms so this sits on a
-  // snap point, and the label formatter shows the extra precision as
-  // "1.05s". Tunable live via the slider (500–3000ms).
-  const [scanMs, setScanMs] = useState(1050);
+  // 1300ms — slowed from 1050ms now that selection moved from blink to
+  // look-up (see handleBlinkEvent). The look-up gesture needs a 500ms
+  // sustained gaze to count, which is ~38% of one cycle at 1300ms — at
+  // the old 1050ms the user only had ~550ms after the cursor landed
+  // before it ticked away, which was too tight. Tunable live via the
+  // slider (500–3000ms).
+  const [scanMs, setScanMs] = useState(1300);
 
   const { state, dispatch } = useScanner({
     scanMs,
@@ -107,6 +117,19 @@ export default function Home() {
       return;
     }
     if (event.kind === "intent") {
+      // Short-but-sustained blink (500-1500ms): insert a space. The
+      // gesture used to commit the active selection, but selection
+      // moved to look-up — a deliberate eye-shut is now reserved for
+      // the most common typing action.
+      dispatch({ type: "insertChar", char: " " });
+      void speak("Space");
+      return;
+    }
+    if (event.kind === "lookUp") {
+      // Sustained upward gaze: commit the active selection. Replaces
+      // the old short-blink commit. Same downstream behaviour — runs
+      // commands, picks letters, accepts suggestion chips — but the
+      // user no longer has to close their eyes to act.
       if (state.phase === "idle") return;
       if (state.phase === "commandScan") {
         const cmd = DEFAULT_COMMANDS[state.cursor];
@@ -127,11 +150,6 @@ export default function Home() {
         if (word) predictor.commit(word);
       }
       dispatch({ type: "select" });
-      return;
-    }
-    if (event.kind === "lookUp") {
-      dispatch({ type: "insertChar", char: " " });
-      void speak("Space");
       return;
     }
     if (event.kind === "lookRight") {
@@ -169,6 +187,24 @@ export default function Home() {
   useEffect(() => {
     blinkReadyRef.current = blink.ready;
   }, [blink.ready]);
+
+  // Speak the active group ("A to D", "E to H", …) every time the cursor
+  // lands on one during groupScan. Lets the user track scanning by ear
+  // — the visual cursor isn't always reachable for an AAC user. The
+  // first announce on entry to groupScan will briefly interrupt the
+  // "Starting" / "Resumed" cue that just played; in practice it sounds
+  // natural ("Starting… A to D").
+  //
+  // Pull cursor out *before* the effect so the discriminated-union
+  // narrowing is captured in a primitive — phase-mismatched cursors
+  // collapse to -1, which both fails the lookup and changes only when
+  // we actually re-enter groupScan.
+  const groupCursor = state.phase === "groupScan" ? state.cursor : -1;
+  useEffect(() => {
+    if (groupCursor < 0) return;
+    const label = DEFAULT_GROUP_LABELS[groupCursor];
+    if (label) void speak(label);
+  }, [groupCursor, speak]);
 
   const systemReady = cameraReady && blink.ready && predictor.ready;
 
@@ -229,12 +265,12 @@ function PageHeader({
     : phase === "idle"
       ? "Hold a blink for 1.5s — or press Start"
       : phase === "groupScan"
-        ? "Scanning groups — blink to lock, hold or pick ☰ for menu"
+        ? "Scanning groups — look up to lock, hold blink for menu"
         : phase === "letterScan"
-          ? "Scanning letters — blink to commit, hold or pick ☰ for menu"
+          ? "Scanning letters — look up to commit, hold blink for menu"
           : phase === "commandScan"
-            ? "Command menu — blink to run, hold to cancel"
-            : "Suggestion picker — blink to commit, hold to cancel";
+            ? "Command menu — look up to run, hold blink to cancel"
+            : "Suggestion picker — look up to commit, hold blink to cancel";
 
   return (
     <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">

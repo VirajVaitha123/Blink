@@ -11,8 +11,9 @@ type GestureRow = {
 
 const GESTURES: readonly GestureRow[] = [
   { gesture: "Long blink (1.5s)", effect: "Start • open menu • cancel menu" },
-  { gesture: "Short blink", effect: "Select (group → letter → commit)" },
-  { gesture: "Look up (0.5s)", effect: "Insert space" },
+  { gesture: "Look up (0.5s)", effect: "Select (group → letter → commit)" },
+  { gesture: "Short blink (0.5–1.5s)", effect: "Insert space" },
+  { gesture: "Look right (1s)", effect: "Open suggestion picker" },
   { gesture: "☰ key", effect: "Open command menu (no holding)" },
 ] as const;
 

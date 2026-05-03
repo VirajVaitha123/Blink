@@ -26,6 +26,24 @@ export const DEFAULT_GROUPS: readonly Group[] = [
 ] as const;
 
 /**
+ * Spoken label for a group, used by the TTS cue that fires when the
+ * scanner cursor lands on the group during groupScan. Picks the first
+ * and last *letter* in the group ("A to D"); ignores SPACE / BACKSPACE
+ * / MENU symbols which aren't meaningfully announceable in this form.
+ *
+ * The last group ("Y", "Z", SPACE, BACKSPACE, MENU) becomes "Y to Z".
+ */
+export function groupLabel(group: Group): string {
+  const letters = group.filter((c) => /^[A-Z]$/.test(c));
+  if (letters.length === 0) return "";
+  if (letters.length === 1) return letters[0];
+  return `${letters[0]} to ${letters[letters.length - 1]}`;
+}
+
+export const DEFAULT_GROUP_LABELS: readonly string[] =
+  DEFAULT_GROUPS.map(groupLabel);
+
+/**
  * Cycle of background colors used to highlight the active group. We cycle
  * rather than colouring each group statically so the user has a strong
  * visual cue that scanning has advanced — even in their peripheral vision.
