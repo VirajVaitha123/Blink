@@ -97,13 +97,15 @@ export const DEFAULT_BLINK_CONFIG: BlinkConfig = {
   // distances people use AAC apps from. Tune lower if needed for the user.
   lookUpHigh: 0.4,
   lookUpLow: 0.2,
-  // 250ms — was 500ms when look-up just inserted a space, but now that
-  // it's the *commit* gesture (the most frequent one in a typing
-  // session) holding for half a second every selection felt laborious.
-  // The 0.4/0.2 hysteresis already filters most accidental glances, so
-  // a quarter-second of sustained upward gaze is enough to be
-  // unambiguously deliberate without being a chore.
-  lookUpMinMs: 250,
+  // 125ms — effectively as instant as the per-frame inference allows
+  // (~30fps = ~33ms per frame, so this is ~4 frames of confirmation).
+  // Iterated down 500ms → 250ms → 125ms because the user kept finding
+  // it too laggy for a commit gesture. The 0.4/0.2 hysteresis is
+  // doing all the heavy lifting now: a glance has to *rotate the iris
+  // far enough* to cross 0.4, which is the actual filter against
+  // accidental glances. If false fires creep in we'll need to raise
+  // lookUpHigh (the entry threshold) rather than lookUpMinMs.
+  lookUpMinMs: 125,
   // Look-right uses the same hysteresis pair as look-up — the underlying
   // blendshapes have similar dynamic range. 1000ms hold matches the user's
   // expectation that a short glance off-screen is forgiven and only a
