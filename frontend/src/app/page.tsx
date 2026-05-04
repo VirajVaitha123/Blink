@@ -152,14 +152,19 @@ export default function Home() {
       return;
     }
     if (event.kind === "lookLeft") {
-      // Sustained left gaze: backspace. No phase guards — same pattern
-      // as the short-blink → space path above; text edits are always
-      // allowed regardless of which scan phase we're in. If the
-      // transcript is already empty, slice(0, -1) is a no-op so the
-      // cue still fires but nothing visible changes (acceptable; the
-      // alternative is silent failure which is more confusing).
+      // Sustained leftward gaze (~800ms) — the menu Backspace pill
+      // shows a fill bar growing during the hold so the gesture is
+      // reversible (release to abort) and visible in peripheral vision.
       dispatch({ type: "backspace" });
       void speak("Backspace");
+      return;
+    }
+    if (event.kind === "lookDown") {
+      // Disabled. The downward-gaze detector still runs in useBlink
+      // (with stricter 0.7/0.5 thresholds tuned to ignore screen-rest
+      // gaze), but we don't act on it — backspace lives on look-left.
+      // Re-enabling is a one-line change here if the user changes
+      // their mind.
       return;
     }
     if (event.kind === "lookRight") {
@@ -213,7 +218,10 @@ export default function Home() {
   useEffect(() => {
     if (groupCursor < 0) return;
     const label = DEFAULT_GROUP_SPOKEN_LABELS[groupCursor];
-    if (label) void speak(label);
+    // "cycle" tag — drops silently if an action cue is mid-play so e.g.
+    // "Backspace" / "Suggestions" finishes uninterrupted, the cursor
+    // ticks past one or two groups, and the next group announces normally.
+    if (label) void speak(label, "cycle");
   }, [groupCursor, speak]);
 
   const systemReady = cameraReady && blink.ready && predictor.ready;
@@ -254,7 +262,12 @@ export default function Home() {
             }
             loading={!predictor.ready}
           />
-          <CommandBar commands={DEFAULT_COMMANDS} state={state} />
+          <CommandBar
+            commands={DEFAULT_COMMANDS}
+            state={state}
+            blink={blink}
+            lookLeftHoldMs={DEFAULT_BLINK_CONFIG.lookLeftHoldMs}
+          />
           <ScanGrid groups={DEFAULT_GROUPS} state={state} />
           <ControlBar state={state} dispatch={dispatch} />
         </section>
