@@ -12,7 +12,7 @@ type GestureRow = {
 const GESTURES: readonly GestureRow[] = [
   { gesture: "Long blink (1.5s)", effect: "Start • open menu • cancel menu" },
   { gesture: "Look up", effect: "Select (group → letter → commit)" },
-  { gesture: "Look left", effect: "Backspace (delete last character)" },
+  { gesture: "Look left (0.8s)", effect: "Backspace (fills the menu pill)" },
   { gesture: "Short blink (0.5–1.5s)", effect: "Insert space" },
   { gesture: "Look right (1s)", effect: "Open suggestion picker" },
   { gesture: "☰ key", effect: "Open command menu (no holding)" },

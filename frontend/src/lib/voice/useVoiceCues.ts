@@ -5,6 +5,23 @@ import { useCallback, useEffect, useRef } from "react";
 import { STATIC_AUDIO } from "./staticAudio";
 
 /**
+ * Cue category. Drives interruption rules:
+ *
+ *   - "action" — user-initiated or system-transition cues (Backspace,
+ *     Space, Suggestions, Starting, …). MUST play to completion. While
+ *     an action is playing, any "cycle" cue is dropped silently. A
+ *     newer action interrupts an older one (latest-action-wins).
+ *
+ *   - "cycle" — repetitive scanner cues (group labels). Drops silently
+ *     if an action is currently playing; missing one is fine because
+ *     the next cursor tick will fire another.
+ *
+ * Default is "action" so adding a new cue without a tag picks the safer
+ * behaviour (always plays).
+ */
+export type SpeakKind = "action" | "cycle";
+
+/**
  * Plays short audio cues. Two sources, transparent to callers:
  *
  *   - **Static manifest** (`STATIC_AUDIO`): pre-recorded MP3s in
@@ -24,6 +41,11 @@ import { STATIC_AUDIO } from "./staticAudio";
 export function useVoiceCues(prewarm: readonly string[] = []) {
   const cacheRef = useRef<Map<string, string>>(new Map());
   const currentRef = useRef<HTMLAudioElement | null>(null);
+  // True while an "action" cue is currently playing. Set when an action
+  // starts; cleared on `ended` / `pause` (only if `currentRef` still
+  // points at the same audio — guards against a newer action's pause()
+  // call on the older audio resetting the flag we just set for the new one).
+  const actionPlayingRef = useRef(false);
 
   const fetchUrl = useCallback(async (text: string): Promise<string> => {
     const cached = cacheRef.current.get(text);
@@ -98,7 +120,13 @@ export function useVoiceCues(prewarm: readonly string[] = []) {
   }, []);
 
   const speak = useCallback(
-    async (text: string) => {
+    async (text: string, kind: SpeakKind = "action") => {
+      // Cycle cue arriving while an action is mid-play: drop it. The
+      // user is hearing something they explicitly need feedback on
+      // ("Backspace", "Suggestions", etc.); we don't want a group label
+      // to step on it. Next cursor tick will fire another cycle cue.
+      if (kind === "cycle" && actionPlayingRef.current) return;
+
       try {
         const url = await fetchUrl(text);
         if (currentRef.current) {
@@ -107,9 +135,25 @@ export function useVoiceCues(prewarm: readonly string[] = []) {
         }
         const audio = new Audio(url);
         currentRef.current = audio;
+
+        if (kind === "action") {
+          actionPlayingRef.current = true;
+          const clear = () => {
+            // Only reset the flag if this same audio is still the
+            // current one — a newer action that interrupted us already
+            // set the flag to true for itself.
+            if (currentRef.current === audio) {
+              actionPlayingRef.current = false;
+            }
+          };
+          audio.addEventListener("ended", clear, { once: true });
+          audio.addEventListener("error", clear, { once: true });
+        }
+
         await audio.play();
       } catch {
         // Swallow: cues are non-critical.
+        if (kind === "action") actionPlayingRef.current = false;
       }
     },
     [fetchUrl],
