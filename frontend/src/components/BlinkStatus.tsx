@@ -13,6 +13,9 @@ type Props = {
   blink: BlinkRuntime;
   longThresholdMs: number;
   lookUpThresholdMs: number;
+  /** What the long blink / look-up are currently bound to ("Select"). */
+  longActionLabel: string;
+  lookUpActionLabel: string;
 };
 
 /**
@@ -21,7 +24,13 @@ type Props = {
  * `MeterBlock` / `StatBlock` via a throttled subscription so the parent
  * isn't forced to reconcile every video frame.
  */
-function BlinkStatusInner({ blink, longThresholdMs, lookUpThresholdMs }: Props) {
+function BlinkStatusInner({
+  blink,
+  longThresholdMs,
+  lookUpThresholdMs,
+  longActionLabel,
+  lookUpActionLabel,
+}: Props) {
   return (
     <Card className="p-4">
       <CardHeader title="Tracking" subtitle={<StatusDot blink={blink} />} />
@@ -40,14 +49,14 @@ function BlinkStatusInner({ blink, longThresholdMs, lookUpThresholdMs }: Props) 
       <div className="mt-4 space-y-3">
         <MeterBlock
           blink={blink}
-          label="Hold blink (start / menu)"
+          label={`Long blink → ${longActionLabel}`}
           metricKey="closedForMs"
           thresholdMs={longThresholdMs}
           color="#34d399"
         />
         <MeterBlock
           blink={blink}
-          label="Hold look-up (space)"
+          label={`Look up → ${lookUpActionLabel}`}
           metricKey="upForMs"
           thresholdMs={lookUpThresholdMs}
           color="#38bdf8"

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { BlinkStatus } from "@/components/BlinkStatus";
@@ -10,11 +11,16 @@ import { ScanGrid } from "@/components/ScanGrid";
 import { ScanSpeedControl } from "@/components/ScanSpeedControl";
 import { SuggestionStrip } from "@/components/SuggestionStrip";
 import { Transcript } from "@/components/Transcript";
+import { useBlink, type BlinkEvent } from "@/lib/blink/useBlink";
 import {
-  DEFAULT_BLINK_CONFIG,
-  useBlink,
-  type BlinkEvent,
-} from "@/lib/blink/useBlink";
+  ACTION_BY_ID,
+  GESTURES,
+  gestureFor,
+  hintFor,
+  type ActionId,
+  type ControlSettings,
+} from "@/lib/controls/controls";
+import { updateControls, useControls } from "@/lib/controls/useControls";
 import { usePredictor } from "@/lib/predict/usePredictor";
 import {
   DEFAULT_COMMANDS,
@@ -42,11 +48,15 @@ const VOICE_CUES: readonly string[] = [
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
-  // 1600ms — bumped from 1500ms for a touch more breathing room
-  // between the audio cue finishing and the cursor advancing. The
-  // gesture isn't the constraint anymore (look-up commit is ~60ms);
-  // pure audio-pacing tune. Tunable live via the slider (500–3000ms).
-  const [scanMs, setScanMs] = useState(1600);
+  // Bindings (gesture → action), per-gesture tuning and scan speed, all
+  // persisted and editable on /controls. The 1600ms default scan speed is
+  // an audio-pacing tune: breathing room between a cue finishing and the
+  // cursor advancing.
+  const controls = useControls();
+  const { scanMs } = controls;
+  const setScanMs = useCallback((next: number) => {
+    updateControls((c) => ({ ...c, scanMs: next }));
+  }, []);
 
   const { state, dispatch } = useScanner({
     scanMs,
@@ -70,7 +80,9 @@ export default function Home() {
   const predictorRef = useRef(predictor);
   const dispatchRef = useRef(dispatch);
   const speakRef = useRef(speak);
+  const controlsRef = useRef(controls);
   useEffect(() => {
+    controlsRef.current = controls;
     stateRef.current = state;
     predictorRef.current = predictor;
     dispatchRef.current = dispatch;
@@ -97,102 +109,102 @@ export default function Home() {
     const dispatch = dispatchRef.current;
     const speak = speakRef.current;
 
-    if (event.kind === "long") {
-      if (state.phase === "idle") {
-        dispatch({ type: "start" });
-        void speak("Starting");
-      } else if (state.phase === "commandScan") {
-        dispatch({ type: "exitCommands" });
-        void speak("Resumed");
-      } else if (state.phase === "suggestionScan") {
-        // Long blink while in the suggestion picker drops back to
-        // scanning, mirroring how it cancels the command menu.
-        dispatch({ type: "exitSuggestions" });
-        void speak("Cancelled");
-      } else {
-        dispatch({ type: "enterCommands" });
-        void speak("Opened menu");
-      }
-      return;
-    }
-    if (event.kind === "intent") {
-      // Short-but-sustained blink (500-1500ms): insert a space. The
-      // gesture used to commit the active selection, but selection
-      // moved to look-up — a deliberate eye-shut is now reserved for
-      // the most common typing action.
-      dispatch({ type: "insertChar", char: " " });
-      void speak("Space");
-      return;
-    }
-    if (event.kind === "lookUp") {
-      // Sustained upward gaze: commit the active selection. Replaces
-      // the old short-blink commit. Same downstream behaviour — runs
-      // commands, picks letters, accepts suggestion chips — but the
-      // user no longer has to close their eyes to act.
-      if (state.phase === "idle") return;
-      if (state.phase === "commandScan") {
-        const cmd = DEFAULT_COMMANDS[state.cursor];
-        // Selecting "Resume" from the command menu also returns to
-        // scanning — speak the same cue so the audio is consistent
-        // regardless of whether the user long-blinked or selected it.
-        if (cmd?.id === "resume") {
-          void speak("Resumed");
-        } else if (cmd?.id === "play" && state.text.trim().length > 0) {
-          void speak(state.text);
-        }
-      } else if (state.phase === "suggestionScan") {
-        // Record the picked word in the predictor's personal/bigram
-        // memory before the reducer swaps the partial for the full
-        // word. parseContext on the *current* text gives us the right
-        // prev word for the bigram update.
-        const word = state.suggestions[state.cursor];
-        if (word) predictor.commit(word);
-      }
-      dispatch({ type: "select" });
-      return;
-    }
-    if (event.kind === "lookLeft") {
-      // Sustained leftward gaze (~800ms) — the menu Backspace pill
-      // shows a fill bar growing during the hold so the gesture is
-      // reversible (release to abort) and visible in peripheral vision.
-      dispatch({ type: "backspace" });
-      void speak("Backspace");
-      return;
-    }
-    if (event.kind === "lookDown") {
-      // Disabled. The downward-gaze detector still runs in useBlink
-      // (with stricter 0.7/0.5 thresholds tuned to ignore screen-rest
-      // gaze), but we don't act on it — backspace lives on look-left.
-      // Re-enabling is a one-line change here if the user changes
-      // their mind.
-      return;
-    }
-    if (event.kind === "lookRight") {
-      // Open the picker from any phase that's safe to interrupt: idle,
-      // groupScan, letterScan. Idle is included so a user can begin a
-      // sentence directly with a SENTENCE_STARTERS pick (or a bigram
-      // continuation right after a Clear) without having to long-blink
-      // Start first. commandScan is excluded — a destructive command
-      // shouldn't be sidestepped — and suggestionScan is excluded
-      // because we're already in it.
-      if (
-        state.phase === "commandScan" ||
-        state.phase === "suggestionScan" ||
-        predictor.suggestions.length === 0
-      ) {
+    // Gestures don't mean anything by themselves — the user's bindings
+    // decide which action each one triggers.
+    const action = controlsRef.current.bindings[event.kind];
+
+    switch (action) {
+      case "none":
         return;
-      }
-      dispatch({
-        type: "enterSuggestions",
-        suggestions: predictor.suggestions,
-      });
-      void speak("Suggestions");
+
+      case "menu":
+        if (state.phase === "idle") {
+          dispatch({ type: "start" });
+          void speak("Starting");
+        } else if (state.phase === "commandScan") {
+          dispatch({ type: "exitCommands" });
+          void speak("Resumed");
+        } else if (state.phase === "suggestionScan") {
+          // Drops back to scanning, mirroring how it cancels the
+          // command menu.
+          dispatch({ type: "exitSuggestions" });
+          void speak("Cancelled");
+        } else {
+          dispatch({ type: "enterCommands" });
+          void speak("Opened menu");
+        }
+        return;
+
+      case "space":
+        dispatch({ type: "insertChar", char: " " });
+        void speak("Space");
+        return;
+
+      case "select":
+        // Commit the active selection: runs commands, picks letters,
+        // accepts suggestion chips.
+        if (state.phase === "idle") return;
+        if (state.phase === "commandScan") {
+          const cmd = DEFAULT_COMMANDS[state.cursor];
+          // Selecting "Resume" from the command menu also returns to
+          // scanning — speak the same cue so the audio is consistent
+          // regardless of how the user got there.
+          if (cmd?.id === "resume") {
+            void speak("Resumed");
+          } else if (cmd?.id === "play" && state.text.trim().length > 0) {
+            void speak(state.text);
+          }
+        } else if (state.phase === "suggestionScan") {
+          // Record the picked word in the predictor's personal/bigram
+          // memory before the reducer swaps the partial for the full
+          // word. parseContext on the *current* text gives us the right
+          // prev word for the bigram update.
+          const word = state.suggestions[state.cursor];
+          if (word) predictor.commit(word);
+        }
+        dispatch({ type: "select" });
+        return;
+
+      case "backspace":
+        // The menu Backspace pill shows a fill bar growing during the
+        // hold so the gesture is reversible (release to abort) and
+        // visible in peripheral vision.
+        dispatch({ type: "backspace" });
+        void speak("Backspace");
+        return;
+
+      case "speak":
+        if (state.text.trim().length > 0) void speak(state.text);
+        return;
+
+      case "suggestions":
+        // Open the picker from any phase that's safe to interrupt: idle,
+        // groupScan, letterScan. Idle is included so a user can begin a
+        // sentence directly with a SENTENCE_STARTERS pick (or a bigram
+        // continuation right after a Clear) without having to start
+        // scanning first. commandScan is excluded — a destructive command
+        // shouldn't be sidestepped — and suggestionScan is excluded
+        // because we're already in it.
+        if (
+          state.phase === "commandScan" ||
+          state.phase === "suggestionScan" ||
+          predictor.suggestions.length === 0
+        ) {
+          return;
+        }
+        dispatch({
+          type: "enterSuggestions",
+          suggestions: predictor.suggestions,
+        });
+        void speak("Suggestions");
+        return;
     }
   }, []);
 
   const blink = useBlink({
     videoRef,
     enabled: cameraReady,
+    config: controls.config,
     onEvent: handleBlinkEvent,
   });
 
@@ -226,9 +238,20 @@ export default function Home() {
 
   const systemReady = cameraReady && blink.ready && predictor.ready;
 
+  const { bindings, config } = controls;
+  const selectHint = hintFor(bindings, "select");
+  const menuHint = hintFor(bindings, "menu");
+  const backspaceHold = holdFor(controls, "backspace");
+  const suggestionsHold = holdFor(controls, "suggestions");
+
   return (
     <main className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-10 lg:py-12">
-      <PageHeader phase={state.phase} systemReady={systemReady} />
+      <PageHeader
+        phase={state.phase}
+        systemReady={systemReady}
+        selectHint={selectHint}
+        menuHint={menuHint}
+      />
 
       <div className="mt-6 grid gap-5 lg:mt-10 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
         <aside className="space-y-4">
@@ -240,11 +263,13 @@ export default function Home() {
           />
           <BlinkStatus
             blink={blink}
-            longThresholdMs={DEFAULT_BLINK_CONFIG.longMinMs}
-            lookUpThresholdMs={DEFAULT_BLINK_CONFIG.lookUpMinMs}
+            longThresholdMs={config.longMinMs}
+            lookUpThresholdMs={config.lookUpMinMs}
+            longActionLabel={ACTION_BY_ID[bindings.long].label}
+            lookUpActionLabel={ACTION_BY_ID[bindings.lookUp].label}
           />
           <ScanSpeedControl scanMs={scanMs} onChange={setScanMs} />
-          <GestureLegend />
+          <GestureLegend settings={controls} />
         </aside>
 
         <section className="space-y-4">
@@ -256,7 +281,10 @@ export default function Home() {
                 : predictor.suggestions
             }
             blink={blink}
-            holdMs={DEFAULT_BLINK_CONFIG.lookRightHoldMs}
+            openHold={suggestionsHold}
+            openHint={hintFor(bindings, "suggestions")}
+            selectHint={selectHint}
+            cancelHint={menuHint}
             activeIndex={
               state.phase === "suggestionScan" ? state.cursor : null
             }
@@ -266,7 +294,9 @@ export default function Home() {
             commands={DEFAULT_COMMANDS}
             state={state}
             blink={blink}
-            lookLeftHoldMs={DEFAULT_BLINK_CONFIG.lookLeftHoldMs}
+            backspaceHold={backspaceHold}
+            selectHint={selectHint}
+            menuHint={menuHint}
           />
           <ScanGrid groups={DEFAULT_GROUPS} state={state} />
           <ControlBar state={state} dispatch={dispatch} />
@@ -276,24 +306,58 @@ export default function Home() {
   );
 }
 
+/**
+ * Hold metric + threshold of the gesture bound to `action`, for the
+ * dwell-fill affordances. Null when nothing is bound to it.
+ */
+function holdFor(controls: ControlSettings, action: ActionId) {
+  const kind = gestureFor(controls.bindings, action);
+  if (!kind) return null;
+  const meta = GESTURES[kind];
+  return { metric: meta.holdMetric, holdMs: controls.config[meta.holdKey] };
+}
+
+/** "Title — a to x, b to y", skipping hints for unbound actions. */
+function describePhase(
+  title: string,
+  hints: readonly (string | null | false)[],
+): string {
+  const parts = hints.filter(Boolean);
+  return parts.length > 0 ? `${title} — ${parts.join(", ")}` : title;
+}
+
 function PageHeader({
   phase,
   systemReady,
+  selectHint,
+  menuHint,
 }: {
   phase: ReturnType<typeof useScanner>["state"]["phase"];
   systemReady: boolean;
+  selectHint: string | null;
+  menuHint: string | null;
 }) {
+  const sel = (verb: string) => selectHint && `${selectHint} to ${verb}`;
+  const menu = (verb: string) => menuHint && `${menuHint} ${verb}`;
   const phaseLabel = !systemReady
     ? "Warming up — gestures will start once the camera and model are ready"
     : phase === "idle"
-      ? "Hold a blink for 1.5s — or press Start"
+      ? menuHint
+        ? `${menuHint.charAt(0).toUpperCase()}${menuHint.slice(1)} to start — or press Start`
+        : "Press Start to begin"
       : phase === "groupScan"
-        ? "Scanning groups — look up to lock, hold blink for menu"
+        ? describePhase("Scanning groups", [sel("lock"), menu("for menu")])
         : phase === "letterScan"
-          ? "Scanning letters — look up to commit, hold blink for menu"
+          ? describePhase("Scanning letters", [
+              sel("commit"),
+              menu("for menu"),
+            ])
           : phase === "commandScan"
-            ? "Command menu — look up to run, hold blink to cancel"
-            : "Suggestion picker — look up to commit, hold blink to cancel";
+            ? describePhase("Command menu", [sel("run"), menu("to cancel")])
+            : describePhase("Suggestion picker", [
+                sel("commit"),
+                menu("to cancel"),
+              ]);
 
   return (
     <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -308,8 +372,16 @@ function PageHeader({
           </p>
         </div>
       </div>
-      <div className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-1.5 text-xs text-white/75 backdrop-blur sm:text-sm">
-        {phaseLabel}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-1.5 text-xs text-white/75 backdrop-blur sm:text-sm">
+          {phaseLabel}
+        </div>
+        <Link
+          href="/controls"
+          className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-4 py-1.5 text-xs font-semibold text-cyan-200 transition-colors hover:bg-cyan-300/20 sm:text-sm"
+        >
+          Controls
+        </Link>
       </div>
     </header>
   );

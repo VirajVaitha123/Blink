@@ -251,7 +251,14 @@ export function useBlink({
   config,
   onEvent,
 }: UseBlinkOptions): BlinkRuntime {
-  const cfg = { ...DEFAULT_BLINK_CONFIG, ...config };
+  // Latest config, read live by the detectors on every frame. Keeping it
+  // in a ref (rather than an effect dependency) means retuning a threshold
+  // or hold time takes effect immediately without tearing down the camera
+  // loop or resetting an in-progress gesture.
+  const cfgRef = useRef<BlinkConfig>({ ...DEFAULT_BLINK_CONFIG, ...config });
+  useEffect(() => {
+    cfgRef.current = { ...DEFAULT_BLINK_CONFIG, ...config };
+  });
 
   const [discrete, setDiscrete] = useState<BlinkDiscreteState>(INITIAL_DISCRETE);
 
@@ -292,36 +299,65 @@ export function useBlink({
     let lastNotifyAt = 0;
 
     // Per-detector state lives outside React; reset on enabled-cycle.
+    // Detector configs are getter-backed views onto cfgRef, so each
+    // `update()` sees whatever the user has tuned most recently.
+    const live = <K extends keyof BlinkConfig>(key: K) => cfgRef.current[key];
     const blinkDetector = createBlinkDetector({
-      closedThreshold: cfg.closedThreshold,
-      openThreshold: cfg.openThreshold,
-      intentMinMs: cfg.intentMinMs,
-      longMinMs: cfg.longMinMs,
+      get closedThreshold() {
+        return live("closedThreshold");
+      },
+      get openThreshold() {
+        return live("openThreshold");
+      },
+      get intentMinMs() {
+        return live("intentMinMs");
+      },
+      get longMinMs() {
+        return live("longMinMs");
+      },
     });
-    const lookUpDetector = createSustainDetector({
-      kind: "lookUp" as const,
-      enterThreshold: cfg.lookUpHigh,
-      exitThreshold: cfg.lookUpLow,
-      sustainMs: cfg.lookUpMinMs,
-    });
-    const lookRightDetector = createSustainDetector({
-      kind: "lookRight" as const,
-      enterThreshold: cfg.lookRightHigh,
-      exitThreshold: cfg.lookRightLow,
-      sustainMs: cfg.lookRightHoldMs,
-    });
-    const lookLeftDetector = createSustainDetector({
-      kind: "lookLeft" as const,
-      enterThreshold: cfg.lookLeftHigh,
-      exitThreshold: cfg.lookLeftLow,
-      sustainMs: cfg.lookLeftHoldMs,
-    });
-    const lookDownDetector = createSustainDetector({
-      kind: "lookDown" as const,
-      enterThreshold: cfg.lookDownHigh,
-      exitThreshold: cfg.lookDownLow,
-      sustainMs: cfg.lookDownHoldMs,
-    });
+    const sustain = <K extends BlinkKind>(
+      kind: K,
+      high: keyof BlinkConfig,
+      low: keyof BlinkConfig,
+      hold: keyof BlinkConfig,
+    ) =>
+      createSustainDetector({
+        kind,
+        get enterThreshold() {
+          return live(high);
+        },
+        get exitThreshold() {
+          return live(low);
+        },
+        get sustainMs() {
+          return live(hold);
+        },
+      });
+    const lookUpDetector = sustain(
+      "lookUp",
+      "lookUpHigh",
+      "lookUpLow",
+      "lookUpMinMs",
+    );
+    const lookRightDetector = sustain(
+      "lookRight",
+      "lookRightHigh",
+      "lookRightLow",
+      "lookRightHoldMs",
+    );
+    const lookLeftDetector = sustain(
+      "lookLeft",
+      "lookLeftHigh",
+      "lookLeftLow",
+      "lookLeftHoldMs",
+    );
+    const lookDownDetector = sustain(
+      "lookDown",
+      "lookDownHigh",
+      "lookDownLow",
+      "lookDownHoldMs",
+    );
 
     // Tracks the discrete fields we last published, so we only call
     // setState when something actually flipped — avoids spurious renders.
@@ -499,7 +535,6 @@ export function useBlink({
       cancelled = true;
       if (rafId !== null) cancelAnimationFrame(rafId);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, videoRef]);
 
   // Memoise the runtime object so consumers get a stable reference unless
