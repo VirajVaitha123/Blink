@@ -2,7 +2,7 @@
 
 import { memo } from "react";
 
-import type { BlinkRuntime } from "@/lib/blink/useBlink";
+import type { BlinkMetrics, BlinkRuntime } from "@/lib/blink/useBlink";
 import { useBlinkMetric } from "@/lib/blink/useBlinkMetric";
 
 import { Card, CardHeader } from "./Card";
@@ -12,8 +12,15 @@ type Props = {
   suggestions: readonly string[];
   /** Subscribable runtime; used by the inner DwellFill child. */
   blink: BlinkRuntime;
-  /** lookRight hold-to-fill threshold from useBlink config. */
-  holdMs: number;
+  /**
+   * Hold metric + threshold of whichever gesture opens the picker, or
+   * null when no gesture does (then there is no fill).
+   */
+  openHold: { metric: keyof BlinkMetrics; holdMs: number } | null;
+  /** Inline hints for the bound gestures ("look up"), null when unbound. */
+  openHint: string | null;
+  selectHint: string | null;
+  cancelHint: string | null;
   /**
    * Cursor index when the scanner is in suggestionScan phase, otherwise null.
    * When non-null the chip at this index gets the active-cursor highlight,
@@ -29,23 +36,26 @@ const HIGHLIGHT_COLOR = "#06b6d4"; // cyan-500, matches the play command pill
 function SuggestionStripInner({
   suggestions,
   blink,
-  holdMs,
+  openHold,
+  openHint,
+  selectHint,
+  cancelHint,
   activeIndex,
   loading = false,
 }: Props) {
   const inPicker = activeIndex !== null;
-  const showFill = !inPicker && blink.isLookingRight && suggestions.length > 0;
+  const canFill = !inPicker && suggestions.length > 0;
 
   return (
-    <Card
-      className="relative overflow-hidden p-4"
-      active={inPicker || showFill}
-    >
-      <DwellFill
-        blink={blink}
-        holdMs={holdMs}
-        enabled={showFill}
-      />
+    <Card className="relative overflow-hidden p-4" active={inPicker}>
+      {openHold && (
+        <DwellFill
+          blink={blink}
+          metric={openHold.metric}
+          holdMs={openHold.holdMs}
+          enabled={canFill}
+        />
+      )}
       <div className="relative">
         <CardHeader
           title="Suggestions"
@@ -55,9 +65,18 @@ function SuggestionStripInner({
             ) : suggestions.length === 0 ? (
               <span className="text-white/40">type to see predictions</span>
             ) : inPicker ? (
-              <span className="text-white/55">blink to commit · hold to exit</span>
+              <span className="text-white/55">
+                {[
+                  selectHint && `${selectHint} to commit`,
+                  cancelHint && `${cancelHint} to exit`,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
             ) : (
-              <span className="text-white/55">look right to open</span>
+              openHint && (
+                <span className="text-white/55">{openHint} to open</span>
+              )
             )
           }
         />
@@ -83,20 +102,22 @@ export const SuggestionStrip = memo(SuggestionStripInner);
 
 /**
  * The dwell-fill bar — the only part of the strip that needs to re-render
- * while the user holds gaze right. Subscribes to `rightForMs` directly so
- * the parent strip stays still during the fill animation.
+ * while the user holds the open gesture. Subscribes to its hold metric
+ * directly so the parent strip stays still during the fill animation.
  */
 function DwellFill({
   blink,
+  metric,
   holdMs,
   enabled,
 }: {
   blink: BlinkRuntime;
+  metric: keyof BlinkMetrics;
   holdMs: number;
   enabled: boolean;
 }) {
-  const rightForMs = useBlinkMetric(blink, "rightForMs");
-  const fraction = enabled ? Math.min(1, rightForMs / holdMs) : 0;
+  const heldMs = useBlinkMetric(blink, metric);
+  const fraction = enabled ? Math.min(1, heldMs / holdMs) : 0;
   return (
     <div
       aria-hidden

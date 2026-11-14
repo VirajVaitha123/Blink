@@ -79,3 +79,142 @@ input[type="range"]::-moz-range-thumb {
   border: 2px solid #07070b;
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2);
 }
+
+/* ─── Controls page: hologram ─────────────────────────────────────────── */
+
+/* Gesture nodes orbit the eyes in the direction of the gesture itself:
+   look-up above, look-left to the left, blinks underneath. On phones the
+   eyes sit on top and the nodes fall into a simple two-column grid. */
+.controls-stage {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+.controls-stage > [data-area="eyes"] {
+  grid-column: 1 / -1;
+}
+@media (min-width: 720px) {
+  .controls-stage {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.9fr) minmax(0, 1fr);
+    grid-template-areas:
+      ". lookUp ."
+      "lookLeft eyes lookRight"
+      "intent lookDown long";
+    align-items: center;
+    gap: 1rem;
+  }
+  .controls-stage > [data-area] {
+    grid-column: auto;
+  }
+  .controls-stage > [data-area="eyes"] { grid-area: eyes; }
+  .controls-stage > [data-area="lookUp"] { grid-area: lookUp; }
+  .controls-stage > [data-area="lookDown"] { grid-area: lookDown; }
+  .controls-stage > [data-area="lookLeft"] { grid-area: lookLeft; }
+  .controls-stage > [data-area="lookRight"] { grid-area: lookRight; }
+  .controls-stage > [data-area="intent"] { grid-area: intent; }
+  .controls-stage > [data-area="long"] { grid-area: long; }
+}
+
+/* The hologram is drawn entirely in --holo, which the page swaps to the
+   colour of whatever action the focused gesture is bound to. */
+.holo {
+  --holo: #67e8f9;
+  --gx: 0;
+  --gy: 0;
+  --open: 1;
+  color: var(--holo);
+  transition: color 400ms ease;
+}
+.holo-figure {
+  animation:
+    holo-float 6s ease-in-out infinite,
+    holo-flicker 5s steps(1, end) infinite;
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--holo) 70%, transparent))
+    drop-shadow(0 0 22px color-mix(in srgb, var(--holo) 35%, transparent));
+}
+.holo-lid {
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scaleY(var(--open));
+  transition: transform 110ms ease-out;
+}
+.holo-iris {
+  transform: translate(calc(var(--gx) * 30px), calc(var(--gy) * 15px));
+  transition: transform 160ms ease-out;
+}
+.holo-spin {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: holo-spin 16s linear infinite;
+}
+.holo-spin-reverse {
+  animation-direction: reverse;
+  animation-duration: 24s;
+}
+.holo-scanlines {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--holo) 16%, transparent) 0 1px,
+    transparent 1px 4px
+  );
+  mask-image: radial-gradient(ellipse 60% 62% at 50% 45%, #000 35%, transparent 75%);
+  animation: holo-scan 7s linear infinite;
+}
+.holo-beam {
+  background: linear-gradient(
+    to top,
+    color-mix(in srgb, var(--holo) 30%, transparent),
+    transparent 85%
+  );
+  clip-path: polygon(38% 100%, 62% 100%, 100% 0, 0 0);
+}
+.holo-emitter {
+  background: radial-gradient(
+    ellipse at center,
+    color-mix(in srgb, var(--holo) 90%, white) 0%,
+    color-mix(in srgb, var(--holo) 45%, transparent) 35%,
+    transparent 70%
+  );
+}
+.holo-fired {
+  animation: holo-fired 700ms ease-out forwards;
+}
+.holo-toast {
+  animation: holo-toast 1500ms ease-out forwards;
+}
+
+@keyframes holo-float {
+  0%, 100% { translate: 0 0; }
+  50% { translate: 0 -6px; }
+}
+@keyframes holo-flicker {
+  0%, 100% { opacity: 1; }
+  47% { opacity: 1; }
+  48% { opacity: 0.72; }
+  49% { opacity: 1; }
+  83% { opacity: 0.86; }
+  84% { opacity: 1; }
+}
+@keyframes holo-spin {
+  to { rotate: 360deg; }
+}
+@keyframes holo-scan {
+  to { background-position: 0 64px; }
+}
+@keyframes holo-fired {
+  0% { opacity: 0.9; transform: scale(0.96); }
+  100% { opacity: 0; transform: scale(1.06); }
+}
+@keyframes holo-toast {
+  0% { opacity: 0; translate: 0 6px; }
+  12%, 70% { opacity: 1; translate: 0 0; }
+  100% { opacity: 0; translate: 0 -4px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .holo-figure,
+  .holo-spin,
+  .holo-scanlines {
+    animation: none;
+  }
+}

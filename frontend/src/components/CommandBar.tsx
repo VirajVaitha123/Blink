@@ -2,7 +2,7 @@
 
 import { memo } from "react";
 
-import type { BlinkRuntime } from "@/lib/blink/useBlink";
+import type { BlinkMetrics, BlinkRuntime } from "@/lib/blink/useBlink";
 import { useBlinkMetric } from "@/lib/blink/useBlinkMetric";
 import { type Command, type CommandEffect } from "@/lib/scanner/layouts";
 import type { ScannerState } from "@/lib/scanner/machine";
@@ -12,10 +12,16 @@ import { Card, CardHeader } from "./Card";
 type Props = {
   commands: readonly Command[];
   state: ScannerState;
-  /** For the look-left dwell-fill on the Backspace pill. */
+  /** For the dwell-fill on the Backspace pill. */
   blink: BlinkRuntime;
-  /** lookLeft hold-to-fill threshold from useBlink config. */
-  lookLeftHoldMs: number;
+  /**
+   * Hold metric + threshold of whichever gesture is bound to backspace,
+   * or null when no gesture is (then the pill shows no fill).
+   */
+  backspaceHold: { metric: keyof BlinkMetrics; holdMs: number } | null;
+  /** Inline hints for the bound gestures ("look up"), null when unbound. */
+  selectHint: string | null;
+  menuHint: string | null;
 };
 
 // Semantic command colours: green = safe / continue, red = destructive,
@@ -30,16 +36,25 @@ const COMMAND_COLORS: Record<CommandEffect, string> = {
 };
 
 /**
- * Command menu — entered via long blink while scanning. Always rendered so
- * the gesture is discoverable, but visually muted when not the active phase.
+ * Command menu — entered via the menu gesture while scanning. Always
+ * rendered so it is discoverable, but visually muted when not the active
+ * phase.
  *
- * The Backspace pill carries an extra dwell-fill driven by `leftForMs`
- * so the user gets a peripheral-vision cue while holding gaze left. Same
- * "release to abort" affordance as the suggestion-card fill on look-right.
+ * The Backspace pill carries an extra dwell-fill driven by the hold timer
+ * of whichever gesture is bound to backspace, so the user gets a
+ * peripheral-vision cue while holding it. Same "release to abort"
+ * affordance as the suggestion-card fill.
  */
 export const CommandBar = memo(CommandBarInner);
 
-function CommandBarInner({ commands, state, blink, lookLeftHoldMs }: Props) {
+function CommandBarInner({
+  commands,
+  state,
+  blink,
+  backspaceHold,
+  selectHint,
+  menuHint,
+}: Props) {
   const active = state.phase === "commandScan";
   return (
     <Card
@@ -50,7 +65,13 @@ function CommandBarInner({ commands, state, blink, lookLeftHoldMs }: Props) {
       <CardHeader
         title="Command menu"
         subtitle={
-          active ? "Blink to run" : <span className="text-white/40">Hold blink to open</span>
+          active ? (
+            selectHint ? `${capitalize(selectHint)} to run` : "Scanning…"
+          ) : (
+            <span className="text-white/40">
+              {menuHint ? `${capitalize(menuHint)} to open` : "Use the ☰ key"}
+            </span>
+          )
         }
       />
       <div className="mt-3 flex flex-wrap gap-2">
@@ -77,10 +98,11 @@ function CommandBarInner({ commands, state, blink, lookLeftHoldMs }: Props) {
                     }
               }
             >
-              {cmd.id === "backspace" && !isActive && (
+              {cmd.id === "backspace" && !isActive && backspaceHold && (
                 <BackspaceDwellFill
                   blink={blink}
-                  holdMs={lookLeftHoldMs}
+                  metric={backspaceHold.metric}
+                  holdMs={backspaceHold.holdMs}
                   color={color}
                 />
               )}
@@ -94,22 +116,24 @@ function CommandBarInner({ commands, state, blink, lookLeftHoldMs }: Props) {
 }
 
 /**
- * Pure look-left progress indicator on the Backspace pill. Subscribes to
- * `leftForMs` directly so the parent CommandBar doesn't reconcile during
+ * Pure hold-progress indicator on the Backspace pill. Subscribes to the
+ * bound gesture's hold metric directly so the parent CommandBar doesn't reconcile during
  * the fill. The fill draws *behind* the label (z-order via the parent's
  * `relative`-positioned label span).
  */
 function BackspaceDwellFill({
   blink,
+  metric,
   holdMs,
   color,
 }: {
   blink: BlinkRuntime;
+  metric: keyof BlinkMetrics;
   holdMs: number;
   color: string;
 }) {
-  const leftForMs = useBlinkMetric(blink, "leftForMs");
-  const fraction = Math.min(1, leftForMs / holdMs);
+  const heldMs = useBlinkMetric(blink, metric);
+  const fraction = Math.min(1, heldMs / holdMs);
   return (
     <div
       aria-hidden
@@ -122,4 +146,8 @@ function BackspaceDwellFill({
       }}
     />
   );
+}
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
